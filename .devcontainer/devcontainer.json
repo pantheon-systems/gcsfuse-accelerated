@@ -8,13 +8,13 @@
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
-		"ghcr.io/devcontainers/features/go:1": {
-			"version": "1.20.7",
-			"golangciLintVersion": "1.51.1"
-		},
-		"ghcr.io/dhoeric/features/hadolint:1": {
-			"version": "2.12.0"
-		},
+		//"ghcr.io/devcontainers/features/go:1": {
+		//	"version": "1.20.7",
+		//	"golangciLintVersion": "1.51.1"
+		//},
+		//"ghcr.io/dhoeric/features/hadolint:1": {
+		//	"version": "2.12.0"
+		//},
 		"ghcr.io/dhoeric/features/google-cloud-cli:1": {}
 	},
 
@@ -33,7 +33,7 @@
 				"cweijan.vscode-mysql-client2",
 				"github.vscode-github-actions"
 			],
-			"go.gopath": "/go"
+			//"go.gopath": "/go"
 
 		}
 	},
