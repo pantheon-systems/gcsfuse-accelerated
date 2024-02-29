@@ -23,16 +23,13 @@
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	"forwardPorts": [
-		3000,
-		5432,
-		9042,
-		9160
+		3306
 	],
 	"customizations": {
 		"vscode": {
 			"extensions": [
 				"golang.go",
-				"GoogleCloudTools.cloudcode",
+				//"GoogleCloudTools.cloudcode",
 				"ms-azuretools.vscode-docker",
 				"cweijan.vscode-mysql-client2"
 			],
