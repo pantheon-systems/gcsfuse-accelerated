@@ -46,7 +46,7 @@
 	],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "git config --global url.\"ssh://git@github.com\".insteadOf \"https://github.com\""
+	//"postCreateCommand": "git config --global url.\"ssh://git@github.com\".insteadOf \"https://github.com\""
 
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
 	// "remoteUser": "root"
