@@ -17,4 +17,4 @@ RUN echo "deb http://deb.debian.org/debian/ oldstable main" >> /etc/apt/sources.
 RUN apt-get update && apt-get install -y \
     wget \
     tar \
-    mysql-client
+    default-mysql-client
