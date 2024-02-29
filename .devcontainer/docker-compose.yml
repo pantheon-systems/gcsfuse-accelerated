@@ -21,7 +21,7 @@ services:
       - ./scripts:/scripts
 
     # Overrides default command so things don't shut down after the process ends.
-    command: sh -c "/scripts/cassandra-setup.sh && sleep infinity"
+    #command: sh -c "/scripts/cassandra-setup.sh && sleep infinity"
 
     # Runs db-mysql on the same network as the db containers, allows "forwardPorts" in devcontainer.json function.
     networks:
