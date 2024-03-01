@@ -44,9 +44,9 @@ func NewMysqlBucket(clock timeutil.Clock, name string) gcs.Bucket {
 	// @TODO: Move these to function parameters and harvest the environment variables outside this code.
 	dbUser := os.Getenv("DATABASE_USER")
 	dbPassword := os.Getenv("DATABASE_PASSWORD")
-	dbHost := os.Getenv("DATABASE_HOST")
-	dbPort := os.Getenv("DATABASE_PORT")
-	dbName := os.Getenv("DATABASE_NAME")
+	dbHost := "localhost"
+	dbPort := "3306"
+	dbName := os.Getenv("DATABASE_DB")
 
 	db, err := sql.Open("mysql", dbUser+":"+dbPassword+"@tcp("+dbHost+":"+dbPort+")/"+dbName)
 	if err != nil {
@@ -172,22 +172,6 @@ func checkName(name string) (err error) {
 		}
 	}
 
-	return
-}
-
-func (b *bucket) checkInvariants(tx *sql.Tx) {
-	/*
-		// Make sure prevGeneration is an upper bound for object generation numbers.
-		for _, o := range b.objects {
-			if !(o.metadata.Generation <= b.prevGeneration) {
-				panic(
-					fmt.Sprintf(
-						"Object generation %v exceeds %v",
-						o.metadata.Generation,
-						b.prevGeneration))
-			}
-		}
-	*/
 	return
 }
 
@@ -427,14 +411,6 @@ func (b *bucket) newReaderLocked(
 	r = bytes.NewReader(result)
 
 	return
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-
-	return b
 }
 
 func copyMetadata(in map[string]string) (out map[string]string) {
