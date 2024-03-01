@@ -30,6 +30,7 @@ require (
 	google.golang.org/api v0.167.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
+	github.com/go-sql-driver/mysql v1.7.1
 )
 
 require (
