@@ -1,8 +1,5 @@
 version: '3.8'
 
-volumes:
-  mysql-data:
-
 networks:
   app-network:
     driver: bridge
@@ -22,22 +19,30 @@ services:
 
     # Overrides default command so things don't shut down after the process ends.
     #command: sh -c "/scripts/cassandra-setup.sh && sleep infinity"
-    command: "sleep infinity"
+    command: sleep infinity
 
-    # Runs db-mysql on the same network as the db containers, allows "forwardPorts" in devcontainer.json function.
-    networks:
-      - app-network
+    # Runs db on the same network as the db containers, allows "forwardPorts" in devcontainer.json function.
+    #networks:
+    #  - app-network
+    network_mode: service:db
 
     # Use "forwardPorts" in **devcontainer.json** to forward an app port locally.
     # (Adding the "ports" property to this file will not forward from a Codespace.)
     depends_on:
-      - db-mysql
+      - db
 
-  db-mysql:
-    hostname: db-mysql
-    image: mysql/mysql-server:latest
+  db:
+    image: mariadb:10.4
+    restart: unless-stopped
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    #networks:
+    #  - app-network
     environment:
       - MYSQL_ROOT_PASSWORD=${DATABASE_PASSWORD}
       - MYSQL_DATABASE=${DATABASE_DB}
       - MYSQL_USER=${DATABASE_USER}
       - MYSQL_PASSWORD=${DATABASE_PASSWORD}
+
+volumes:
+  mariadb-data:
