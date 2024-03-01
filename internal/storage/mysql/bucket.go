@@ -40,7 +40,7 @@ import (
 var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
 
 // Equivalent to NewConn(clock).GetBucket(name).
-func NewMysqlBucket(clock timeutil.Clock, name string) gcs.Bucket {
+func NewMysqlBucket(clock timeutil.Clock, name string) (b gcs.Bucket) {
 	// @TODO: Move these to function parameters and harvest the environment variables outside this code.
 	dbUser := os.Getenv("DATABASE_USER")
 	dbPassword := os.Getenv("DATABASE_PASSWORD")
@@ -50,21 +50,28 @@ func NewMysqlBucket(clock timeutil.Clock, name string) gcs.Bucket {
 
 	db, err := sql.Open("mysql", dbUser+":"+dbPassword+"@tcp("+dbHost+":"+dbPort+")/"+dbName)
 	if err != nil {
+		fmt.Println("failed to connect to db")
 		panic(err)
 	}
+
+	name = strings.ReplaceAll(name, "-", "_")
+	qry := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (name VARCHAR(255) NOT NULL, value BLOB, PRIMARY KEY (name))", name)
+
+	fmt.Println("table creation: ", qry)
 
 	// Create the table
-	_, err = db.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (key VARCHAR(255), value BLOB, PRIMARY KEY (key))", name))
+	_, err = db.Exec(qry)
 	if err != nil {
+		fmt.Println("failed to create table")
 		panic(err)
 	}
 
-	b := &bucket{
+	b = &bucket{
 		clock: clock,
 		name:  name,
 		db:    db,
 	}
-	return b
+	return
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -125,7 +132,7 @@ func (b *bucket) getObject(name string, forUpdate bool, tx *sql.Tx) (obj *mysqlO
 	}
 
 	// Find the object with the requested name.
-	rows, err := tx.Query("SELECT "+forUpdateClause+" value FROM "+b.name+" WHERE key = ?", name)
+	rows, err := tx.Query("SELECT value FROM "+b.name+" WHERE name = ? "+forUpdateClause, name)
 	if err != nil {
 		return nil, err
 	}
@@ -143,15 +150,14 @@ func (b *bucket) getObject(name string, forUpdate bool, tx *sql.Tx) (obj *mysqlO
 
 func rowToRecord(row *sql.Rows) (obj *mysqlObject, err error) {
 	var serializedData bytes.Buffer
-	obj = nil
-	if err := row.Scan(&serializedData); err != nil {
-		return nil, err
+	if err = row.Scan(&serializedData); err != nil {
+		return
 	}
 	dec := gob.NewDecoder(&serializedData)
-	if err := dec.Decode(&obj); err != nil {
-		return nil, err
+	if err = dec.Decode(&obj); err != nil {
+		return
 	}
-	return obj, nil
+	return
 }
 
 func checkName(name string) (err error) {
@@ -226,7 +232,7 @@ func (b *bucket) createObjectLocked(
 	}
 
 	// Find any existing record for this name.
-	rows, err := tx.Query("SELECT FOR UPDATE value FROM "+b.name+" WHERE key = ?", req.Name)
+	rows, err := tx.Query("SELECT value FROM "+b.name+" WHERE name = ? FOR UPDATE", req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +341,7 @@ func (b *bucket) createObjectLocked(
 	}
 
 	// Replace an entry in or add an entry to our database of objects.
-	_, err = tx.Query("INSERT INTO "+b.name+" (key, value) VALUES (%s, %b) ON DUPLICATE KEY UPDATE value = %b", req.Name, buf, buf)
+	_, err = tx.Query("INSERT INTO "+b.name+" (name, value) VALUES (%s, %b) ON DUPLICATE KEY UPDATE value = %b", req.Name, buf, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +357,7 @@ func (b *bucket) newReaderLocked(
 	req *gcs.ReadObjectRequest, tx *sql.Tx) (r io.Reader, existingRecord *mysqlObject, err error) {
 
 	// Find the object with the requested name.
-	rows, err := tx.Query("SELECT FOR UPDATE value FROM "+b.name+" WHERE key = ?", req.Name)
+	rows, err := tx.Query("SELECT value FROM "+b.name+" WHERE name = ? FOR UPDATE", req.Name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -467,7 +473,7 @@ func (b *bucket) ListObjects(
 	}
 
 	// Find the object with the requested name.
-	rows, err := tx.Query("SELECT value FROM "+b.name+" WHERE key LIKE ?% LIMIT %d", nameStart, maxResults+1)
+	rows, err := tx.Query("SELECT value FROM "+b.name+" WHERE name LIKE ?% LIMIT %d", nameStart, maxResults+1)
 	if err != nil {
 		return nil, err
 	}
@@ -611,7 +617,7 @@ func (b *bucket) CopyObject(
 	}
 
 	// Does the object exist?
-	rows, err := tx.Query("SELECT FOR UPDATE value FROM "+b.name+" WHERE key = ?", req.SrcName)
+	rows, err := tx.Query("SELECT value FROM "+b.name+" WHERE name = ? FOR UPDATE", req.SrcName)
 	if err != nil {
 		return nil, err
 	}
@@ -675,7 +681,7 @@ func (b *bucket) CopyObject(
 	}
 
 	// Replace an entry in or add an entry to our database of objects.
-	_, err = tx.Query("INSERT INTO "+b.name+" (key, value) VALUES (%s, %b) ON DUPLICATE KEY UPDATE value = %b", req.DstName, buf, buf)
+	_, err = tx.Query("INSERT INTO "+b.name+" (name, value) VALUES (%s, %b) ON DUPLICATE KEY UPDATE value = %b", req.DstName, buf, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -812,7 +818,7 @@ func (b *bucket) UpdateObject(
 		return
 	}
 
-	if existingObj != nil {
+	if existingObj == nil {
 		err = &gcs.NotFoundError{
 			Err: fmt.Errorf("Object %s not found", req.Name),
 		}
@@ -943,7 +949,7 @@ func (b *bucket) DeleteObject(
 	}
 
 	// Remove the object.
-	_, err = tx.Query("DELETE FROM "+b.name+" WHERE key = %s", req.Name)
+	_, err = tx.Query("DELETE FROM "+b.name+" WHERE name = %s", req.Name)
 	if err != nil {
 		return
 	}
