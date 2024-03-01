@@ -14,7 +14,6 @@ FROM mcr.microsoft.com/devcontainers/go:1.22-bookworm
 
 #RUN echo "deb http://deb.debian.org/debian/ oldstable main" >> /etc/apt/sources.list && echo "deb-src http://deb.debian.org/debian/ oldstable main" >> /etc/apt/sources.list
 
-RUN apt-get update && apt-get install -y \
-    wget \
-    tar \
-    default-mysql-client
+RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
+    && apt-get install -y mariadb-client \ 
+    && apt-get clean -y && rm -rf /var/lib/apt/lists/*

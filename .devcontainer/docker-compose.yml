@@ -1,9 +1,5 @@
 version: '3.8'
 
-networks:
-  app-network:
-    driver: bridge
-
 services:
   app:
     build:
