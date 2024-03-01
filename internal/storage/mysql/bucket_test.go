@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fake
+package mysql
 
 import (
 	"testing"
@@ -34,7 +34,7 @@ func init() {
 		deps.Clock = clock
 
 		// Set up the bucket.
-		deps.Bucket = NewFakeBucket(clock, "some_bucket")
+		deps.Bucket = NewMysqlBucket(clock, "some_bucket")
 
 		return
 	}

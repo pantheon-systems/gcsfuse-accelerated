@@ -22,6 +22,7 @@ import (
 
 	"github.com/googlecloudplatform/gcsfuse/internal/storage/fake"
 	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/internal/storage/mysql"
 	. "github.com/jacobsa/oglematchers"
 	. "github.com/jacobsa/ogletest"
 	"github.com/jacobsa/timeutil"
@@ -45,6 +46,9 @@ func (t *AllBucketsTest) SetUpTestSuite() {
 		"bucket-0": fake.NewFakeBucket(mtimeClock, "bucket-0"),
 		"bucket-1": fake.NewFakeBucket(mtimeClock, "bucket-1"),
 		"bucket-2": fake.NewFakeBucket(mtimeClock, "bucket-2"),
+		"bucket-3": mysql.NewMysqlBucket(mtimeClock, "bucket-3"),
+		"bucket-4": mysql.NewMysqlBucket(mtimeClock, "bucket-4"),
+		"bucket-5": mysql.NewMysqlBucket(mtimeClock, "bucket-5"),
 	}
 	// buckets: {"some_bucket", "bucket-1", "bucket-2"}
 	t.fsTest.SetUpTestSuite()

@@ -40,7 +40,7 @@ import (
 var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
 
 // Equivalent to NewConn(clock).GetBucket(name).
-func NewMysqlBucket(clock timeutil.Clock, name string) (gcs.Bucket, error) {
+func NewMysqlBucket(clock timeutil.Clock, name string) gcs.Bucket {
 	// @TODO: Move these to function parameters and harvest the environment variables outside this code.
 	dbUser := os.Getenv("DATABASE_USER")
 	dbPassword := os.Getenv("DATABASE_PASSWORD")
@@ -50,13 +50,13 @@ func NewMysqlBucket(clock timeutil.Clock, name string) (gcs.Bucket, error) {
 
 	db, err := sql.Open("mysql", dbUser+":"+dbPassword+"@tcp("+dbHost+":"+dbPort+")/"+dbName)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
 
 	// Create the table
 	_, err = db.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (key VARCHAR(255), value BLOB, PRIMARY KEY (key))", name))
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
 
 	b := &bucket{
@@ -64,7 +64,7 @@ func NewMysqlBucket(clock timeutil.Clock, name string) (gcs.Bucket, error) {
 		name:  name,
 		db:    db,
 	}
-	return b, nil
+	return b
 }
 
 ////////////////////////////////////////////////////////////////////////
