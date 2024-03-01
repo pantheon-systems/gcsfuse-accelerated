@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -98,17 +97,6 @@ func prefixSuccessor(prefix string) string {
 	return string(limit)
 }
 
-// Return the smallest i such that prefix < s[i].metadata.Name and
-// !strings.HasPrefix(s[i].metadata.Name, prefix).
-func (s fakeObjectSlice) prefixUpperBound(prefix string) int {
-	successor := prefixSuccessor(prefix)
-	if successor == "" {
-		return len(s)
-	}
-
-	return s.lowerBound(successor)
-}
-
 ////////////////////////////////////////////////////////////////////////
 // Helpers
 ////////////////////////////////////////////////////////////////////////
@@ -128,6 +116,42 @@ type bucket struct {
 	// @TODO: Replace with counter in the database.
 	prevGeneration int64 // GUARDED_BY(mu)
 
+}
+
+func (b *bucket) getObject(name string, forUpdate bool, tx *sql.Tx) (obj *mysqlObject, err error) {
+	forUpdateClause := ""
+	if forUpdate {
+		forUpdateClause = "FOR UPDATE"
+	}
+
+	// Find the object with the requested name.
+	rows, err := tx.Query("SELECT "+forUpdateClause+" value FROM "+b.name+" WHERE key = ?", name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		obj, err = rowToRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return
+}
+
+func rowToRecord(row *sql.Rows) (obj *mysqlObject, err error) {
+	var serializedData bytes.Buffer
+	obj = nil
+	if err := row.Scan(&serializedData); err != nil {
+		return nil, err
+	}
+	dec := gob.NewDecoder(&serializedData)
+	if err := dec.Decode(&obj); err != nil {
+		return nil, err
+	}
+	return obj, nil
 }
 
 func checkName(name string) (err error) {
@@ -226,14 +250,8 @@ func (b *bucket) createObjectLocked(
 
 	var existingRecord *mysqlObject
 	for rows.Next() {
-		var serializedData bytes.Buffer
-
-		if err := rows.Scan(&serializedData); err != nil {
-			return nil, err
-		}
-
-		dec := gob.NewDecoder(&serializedData)
-		if err := dec.Decode(&existingRecord); err != nil {
+		existingRecord, err = rowToRecord(rows)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -325,8 +343,15 @@ func (b *bucket) createObjectLocked(
 	var fo mysqlObject = b.mintObject(req, contents)
 	o = copyObject(&fo.metadata)
 
+	// Serialize the data.
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(fo); err != nil {
+		return nil, err
+	}
+
 	// Replace an entry in or add an entry to our database of objects.
-	_, err = tx.Query("INSERT INTO "+b.name+" (key, value) VALUES (%s, %b) ON DUPLICATE KEY UPDATE value = %b", req.Name, fo, fo)
+	_, err = tx.Query("INSERT INTO "+b.name+" (key, value) VALUES (%s, %b) ON DUPLICATE KEY UPDATE value = %b", req.Name, buf, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -339,26 +364,18 @@ func (b *bucket) createObjectLocked(
 //
 // LOCKS_REQUIRED(b.mu)
 func (b *bucket) newReaderLocked(
-	req *gcs.ReadObjectRequest, tx *sql.Tx) (r io.Reader, err error) {
+	req *gcs.ReadObjectRequest, tx *sql.Tx) (r io.Reader, existingRecord *mysqlObject, err error) {
 
 	// Find the object with the requested name.
 	rows, err := tx.Query("SELECT FOR UPDATE value FROM "+b.name+" WHERE key = ?", req.Name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var existingRecord *mysqlObject
-
 	for rows.Next() {
-		var serializedData bytes.Buffer
-
-		if err := rows.Scan(&serializedData); err != nil {
-			return nil, err
-		}
-
-		dec := gob.NewDecoder(&serializedData)
-		if err := dec.Decode(&existingRecord); err != nil {
-			return nil, err
+		existingRecord, err = rowToRecord(rows)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 
@@ -473,15 +490,25 @@ func (b *bucket) ListObjects(
 		nameStart = req.ContinuationToken
 	}
 
+	// Find the object with the requested name.
+	rows, err := tx.Query("SELECT value FROM "+b.name+" WHERE key LIKE ?% LIMIT %d", nameStart, maxResults+1)
+	if err != nil {
+		return nil, err
+	}
+
 	// Find the range of indexes within the array to scan.
-	indexStart := b.objects.lowerBound(nameStart)
-	prefixLimit := b.objects.prefixUpperBound(req.Prefix)
-	indexLimit := minInt(indexStart+maxResults, prefixLimit)
+	//prefixLimit := b.objects.prefixUpperBound(req.Prefix)
+	//indexLimit := minInt(indexStart+maxResults, prefixLimit)
 
 	// Scan the array.
 	var lastResultWasPrefix bool
-	for i := indexStart; i < indexLimit; i++ {
-		var o mysqlObject = b.objects[i]
+	remainingResults := maxResults
+	for rows.Next() {
+		o, err := rowToRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+
 		name := o.metadata.Name
 
 		// Search for a delimiter if necessary.
@@ -519,11 +546,16 @@ func (b *bucket) ListObjects(
 		// Otherwise, return as an object result. Make a copy to avoid handing back
 		// internal state.
 		listing.Objects = append(listing.Objects, copyObject(&o.metadata))
+		remainingResults--
+
+		if remainingResults == 0 {
+			break
+		}
 	}
 
 	// Set up a cursor for where to start the next scan if we didn't exhaust the
 	// results.
-	if indexLimit < prefixLimit {
+	if rows.Next() {
 		// If the final object we visited was returned as an element in
 		// listing.CollapsedRuns, we want to skip all other objects that would
 		// result in the same so we don't return duplicate elements in
@@ -542,7 +574,11 @@ func (b *bucket) ListObjects(
 			}
 		} else {
 			// Otherwise, we'll start scanning at the next object.
-			listing.ContinuationToken = b.objects[indexLimit].metadata.Name
+			o, err := rowToRecord(rows)
+			if err != nil {
+				return nil, err
+			}
+			listing.ContinuationToken = o.metadata.Name
 		}
 	}
 
@@ -553,10 +589,13 @@ func (b *bucket) ListObjects(
 func (b *bucket) NewReader(
 	ctx context.Context,
 	req *gcs.ReadObjectRequest) (rc io.ReadCloser, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	tx, err := b.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
-	r, _, err := b.newReaderLocked(req)
+	r, _, err := b.newReaderLocked(req, tx)
 	if err != nil {
 		return
 	}
@@ -569,10 +608,13 @@ func (b *bucket) NewReader(
 func (b *bucket) CreateObject(
 	ctx context.Context,
 	req *gcs.CreateObjectRequest) (o *gcs.Object, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	tx, err := b.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
-	o, err = b.createObjectLocked(req)
+	o, err = b.createObjectLocked(req, tx)
 	return
 }
 
@@ -580,8 +622,11 @@ func (b *bucket) CreateObject(
 func (b *bucket) CopyObject(
 	ctx context.Context,
 	req *gcs.CopyObjectRequest) (o *gcs.Object, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	tx, err := b.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
 	// Check that the destination name is legal.
 	err = checkName(req.DstName)
@@ -590,8 +635,20 @@ func (b *bucket) CopyObject(
 	}
 
 	// Does the object exist?
-	srcIndex := b.objects.find(req.SrcName)
-	if srcIndex == len(b.objects) {
+	rows, err := tx.Query("SELECT FOR UPDATE value FROM "+b.name+" WHERE key = ?", req.SrcName)
+	if err != nil {
+		return nil, err
+	}
+
+	var src *mysqlObject
+	for rows.Next() {
+		src, err = rowToRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if src == nil {
 		err = &gcs.NotFoundError{
 			Err: fmt.Errorf("Object %q not found", req.SrcName),
 		}
@@ -601,7 +658,7 @@ func (b *bucket) CopyObject(
 
 	// Does it have the correct generation?
 	if req.SrcGeneration != 0 &&
-		b.objects[srcIndex].metadata.Generation != req.SrcGeneration {
+		src.metadata.Generation != req.SrcGeneration {
 		err = &gcs.NotFoundError{
 			Err: fmt.Errorf(
 				"Object %s generation %d not found", req.SrcName, req.SrcGeneration),
@@ -613,12 +670,12 @@ func (b *bucket) CopyObject(
 	// Does it have the correct meta-generation?
 	if req.SrcMetaGenerationPrecondition != nil {
 		p := *req.SrcMetaGenerationPrecondition
-		if b.objects[srcIndex].metadata.MetaGeneration != p {
+		if src.metadata.MetaGeneration != p {
 			err = &gcs.PreconditionError{
 				Err: fmt.Errorf(
 					"Object %q has meta-generation %d",
 					req.SrcName,
-					b.objects[srcIndex].metadata.MetaGeneration),
+					src.metadata.MetaGeneration),
 			}
 
 			return
@@ -627,20 +684,24 @@ func (b *bucket) CopyObject(
 
 	// Copy it and assign a new generation number, to ensure that the generation
 	// number for the destination name is strictly increasing.
-	dst := b.objects[srcIndex]
+	dst := src
 	dst.metadata.Name = req.DstName
 	dst.metadata.MediaLink = "http://localhost/download/storage/mysql/" + req.DstName
 
 	b.prevGeneration++
 	dst.metadata.Generation = b.prevGeneration
 
-	// Insert into our array.
-	existingIndex := b.objects.find(req.DstName)
-	if existingIndex < len(b.objects) {
-		b.objects[existingIndex] = dst
-	} else {
-		b.objects = append(b.objects, dst)
-		sort.Sort(b.objects)
+	// Serialize the data.
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(dst); err != nil {
+		return nil, err
+	}
+
+	// Replace an entry in or add an entry to our database of objects.
+	_, err = tx.Query("INSERT INTO "+b.name+" (key, value) VALUES (%s, %b) ON DUPLICATE KEY UPDATE value = %b", req.DstName, buf, buf)
+	if err != nil {
+		return nil, err
 	}
 
 	o = copyObject(&dst.metadata)
@@ -651,8 +712,11 @@ func (b *bucket) CopyObject(
 func (b *bucket) ComposeObjects(
 	ctx context.Context,
 	req *gcs.ComposeObjectsRequest) (o *gcs.Object, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	tx, err := b.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
 	// GCS doesn't like too few or too many sources.
 	if len(req.Sources) < 1 {
@@ -672,19 +736,19 @@ func (b *bucket) ComposeObjects(
 
 	for _, src := range req.Sources {
 		var r io.Reader
-		var srcIndex int
+		var srcObj *mysqlObject
 
-		r, srcIndex, err = b.newReaderLocked(&gcs.ReadObjectRequest{
+		r, srcObj, err = b.newReaderLocked(&gcs.ReadObjectRequest{
 			Name:       src.Name,
 			Generation: src.Generation,
-		})
+		}, tx)
 
 		if err != nil {
 			return
 		}
 
 		srcReaders = append(srcReaders, r)
-		dstComponentCount += b.objects[srcIndex].metadata.ComponentCount
+		dstComponentCount += srcObj.metadata.ComponentCount
 	}
 
 	// GCS doesn't like the component count to go too high.
@@ -703,13 +767,17 @@ func (b *bucket) ComposeObjects(
 		Metadata:                   req.Metadata,
 	}
 
-	_, err = b.createObjectLocked(createReq)
+	_, err = b.createObjectLocked(createReq, tx)
 	if err != nil {
 		return
 	}
 
-	dstIndex := b.objects.find(req.DstName)
-	metadata := &b.objects[dstIndex].metadata
+	dstObj, err := b.getObject(req.DstName, false, tx)
+	if err != nil {
+		return
+	}
+
+	metadata := dstObj.metadata
 
 	// Touchup: fix the component count.
 	metadata.ComponentCount = dstComponentCount
@@ -718,7 +786,7 @@ func (b *bucket) ComposeObjects(
 	// composite objects.
 	metadata.MD5 = nil
 
-	o = copyObject(metadata)
+	o = copyObject(&metadata)
 	return
 }
 
@@ -726,12 +794,19 @@ func (b *bucket) ComposeObjects(
 func (b *bucket) StatObject(
 	ctx context.Context,
 	req *gcs.StatObjectRequest) (o *gcs.Object, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	tx, err := b.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
 	// Does the object exist?
-	index := b.objects.find(req.Name)
-	if index == len(b.objects) {
+	obj, err := b.getObject(req.Name, false, tx)
+	if err != nil {
+		return
+	}
+
+	if obj != nil {
 		err = &gcs.NotFoundError{
 			Err: fmt.Errorf("Object %s not found", req.Name),
 		}
@@ -740,7 +815,7 @@ func (b *bucket) StatObject(
 	}
 
 	// Make a copy to avoid handing back internal state.
-	o = copyObject(&b.objects[index].metadata)
+	o = copyObject(&obj.metadata)
 
 	return
 }
@@ -749,20 +824,26 @@ func (b *bucket) StatObject(
 func (b *bucket) UpdateObject(
 	ctx context.Context,
 	req *gcs.UpdateObjectRequest) (o *gcs.Object, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	tx, err := b.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
 	// Does the object exist?
-	index := b.objects.find(req.Name)
-	if index == len(b.objects) {
+	existingObj, err := b.getObject(req.Name, true, tx)
+	if err != nil {
+		return
+	}
+
+	if existingObj != nil {
 		err = &gcs.NotFoundError{
 			Err: fmt.Errorf("Object %s not found", req.Name),
 		}
 
 		return
 	}
-
-	var obj *gcs.Object = &b.objects[index].metadata
+	var obj *gcs.Object = &existingObj.metadata
 
 	// Does the generation number match the request?
 	if req.Generation != 0 && obj.Generation != req.Generation {
@@ -826,6 +907,19 @@ func (b *bucket) UpdateObject(
 	obj.MetaGeneration++
 	obj.Updated = b.clock.Now()
 
+	// Serialize the data.
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err = enc.Encode(obj); err != nil {
+		return
+	}
+
+	// Replace the existing entry.
+	_, err = tx.Query("UPDATE "+b.name+" SET value = %b", req.Name, buf, buf)
+	if err != nil {
+		return
+	}
+
 	// Make a copy to avoid handing back internal state.
 	o = copyObject(obj)
 
@@ -836,30 +930,36 @@ func (b *bucket) UpdateObject(
 func (b *bucket) DeleteObject(
 	ctx context.Context,
 	req *gcs.DeleteObjectRequest) (err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	tx, err := b.db.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
 
-	// Do we possess the object with the given name?
-	index := b.objects.find(req.Name)
-	if index == len(b.objects) {
+	// Does the object exist?
+	obj, err := b.getObject(req.Name, true, tx)
+	if err != nil {
+		return
+	}
+	if obj == nil {
 		return
 	}
 
 	// Don't do anything if the generation is wrong.
 	if req.Generation != 0 &&
-		b.objects[index].metadata.Generation != req.Generation {
+		obj.metadata.Generation != req.Generation {
 		return
 	}
 
 	// Check the meta-generation if requested.
 	if req.MetaGenerationPrecondition != nil {
 		p := *req.MetaGenerationPrecondition
-		if b.objects[index].metadata.MetaGeneration != p {
+		if obj.metadata.MetaGeneration != p {
 			err = &gcs.PreconditionError{
 				Err: fmt.Errorf(
 					"Object %q has meta-generation %d",
 					req.Name,
-					b.objects[index].metadata.MetaGeneration),
+					obj.metadata.MetaGeneration),
 			}
 
 			return
@@ -867,7 +967,10 @@ func (b *bucket) DeleteObject(
 	}
 
 	// Remove the object.
-	b.objects = append(b.objects[:index], b.objects[index+1:]...)
+	_, err = tx.Query("DELETE FROM "+b.name+" WHERE key = %s", req.Name)
+	if err != nil {
+		return
+	}
 
 	return
 }
