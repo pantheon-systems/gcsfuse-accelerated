@@ -20,8 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/metadata"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/metadata"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/storageutil"
 	"golang.org/x/net/context"
 
 	"github.com/jacobsa/timeutil"
@@ -77,7 +79,8 @@ func (b *fastStatBucket) insertMultiple(objs []*gcs.Object) {
 
 	expiration := b.clock.Now().Add(b.ttl)
 	for _, o := range objs {
-		b.cache.Insert(o, expiration)
+		m := storageutil.ConvertObjToMinObject(o)
+		b.cache.Insert(m, expiration)
 	}
 }
 
@@ -104,11 +107,11 @@ func (b *fastStatBucket) invalidate(name string) {
 }
 
 // LOCKS_EXCLUDED(b.mu)
-func (b *fastStatBucket) lookUp(name string) (hit bool, o *gcs.Object) {
+func (b *fastStatBucket) lookUp(name string) (hit bool, m *gcs.MinObject) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	hit, o = b.cache.LookUp(name, b.clock.Now())
+	hit, m = b.cache.LookUp(name, b.clock.Now())
 	return
 }
 
@@ -118,6 +121,10 @@ func (b *fastStatBucket) lookUp(name string) (hit bool, o *gcs.Object) {
 
 func (b *fastStatBucket) Name() string {
 	return b.wrapped.Name()
+}
+
+func (b *fastStatBucket) BucketType() gcs.BucketType {
+	return b.wrapped.BucketType()
 }
 
 func (b *fastStatBucket) NewReader(
@@ -134,7 +141,7 @@ func (b *fastStatBucket) CreateObject(
 	// Throw away any existing record for this object.
 	b.invalidate(req.Name)
 
-	// Create the new object.
+	// TODO: create object to be replaced with create folder api once integrated
 	o, err = b.wrapped.CreateObject(ctx, req)
 	if err != nil {
 		return
@@ -187,10 +194,18 @@ func (b *fastStatBucket) ComposeObjects(
 // LOCKS_EXCLUDED(b.mu)
 func (b *fastStatBucket) StatObject(
 	ctx context.Context,
-	req *gcs.StatObjectRequest) (o *gcs.Object, err error) {
+	req *gcs.StatObjectRequest) (m *gcs.MinObject, e *gcs.ExtendedObjectAttributes, err error) {
+	// If ExtendedObjectAttributes are requested without fetching from gcs enabled, panic.
+	if !req.ForceFetchFromGcs && req.ReturnExtendedObjectAttributes {
+		panic("invalid StatObjectRequest: ForceFetchFromGcs: false and ReturnExtendedObjectAttributes: true")
+	}
 	// If fetching from gcs is enabled, directly make a call to GCS.
 	if req.ForceFetchFromGcs {
-		return b.StatObjectFromGcs(ctx, req)
+		m, e, err = b.StatObjectFromGcs(ctx, req)
+		if !req.ReturnExtendedObjectAttributes {
+			e = nil
+		}
+		return
 	}
 
 	// Do we have an entry in the cache?
@@ -204,8 +219,8 @@ func (b *fastStatBucket) StatObject(
 			return
 		}
 
-		// Otherwise, return the object.
-		o = entry
+		// Otherwise, return MinObject and nil ExtendedObjectAttributes.
+		m = entry
 		return
 	}
 
@@ -256,8 +271,15 @@ func (b *fastStatBucket) DeleteObject(
 	return
 }
 
-func (b *fastStatBucket) StatObjectFromGcs(ctx context.Context, req *gcs.StatObjectRequest) (o *gcs.Object, err error) {
-	o, err = b.wrapped.StatObject(ctx, req)
+func (b *fastStatBucket) DeleteFolder(ctx context.Context, folderName string) error {
+	b.invalidate(folderName)
+	err := b.wrapped.DeleteFolder(ctx, folderName)
+	return err
+}
+
+func (b *fastStatBucket) StatObjectFromGcs(ctx context.Context,
+	req *gcs.StatObjectRequest) (m *gcs.MinObject, e *gcs.ExtendedObjectAttributes, err error) {
+	m, e, err = b.wrapped.StatObject(ctx, req)
 	if err != nil {
 		// Special case: NotFoundError -> negative entry.
 		if _, ok := err.(*gcs.NotFoundError); ok {
@@ -268,7 +290,23 @@ func (b *fastStatBucket) StatObjectFromGcs(ctx context.Context, req *gcs.StatObj
 	}
 
 	// Put the object in cache.
+	o := storageutil.ConvertMinObjectToObject(m)
 	b.insert(o)
+
+	return
+}
+
+func (b *fastStatBucket) GetFolder(
+	ctx context.Context,
+	prefix string) (folder *controlpb.Folder, err error) {
+	// Fetch the listing.
+	folder, err = b.wrapped.GetFolder(ctx, prefix)
+	if err != nil {
+		return
+	}
+
+	// TODO: add folder metadata in stat cache
+	// b.insertFolder(folder)
 
 	return
 }

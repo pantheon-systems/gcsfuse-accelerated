@@ -15,7 +15,10 @@
 package util
 
 import (
+	"context"
 	"fmt"
+	"hash/crc32"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -23,7 +26,7 @@ import (
 
 	"github.com/jacobsa/fuse/fsutil"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/data"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/data"
 )
 
 const (
@@ -36,6 +39,7 @@ const (
 	FallbackToGCSErrMsg                       = "read via gcs"
 	FileNotPresentInCacheErrMsg               = "file is not present in cache"
 	CacheHandleNotRequiredForRandomReadErrMsg = "cacheFileForRangeRead is false, read type random read and fileInfo entry is absent"
+	BufferSizeForCRC                          = 65536
 )
 
 const (
@@ -126,5 +130,54 @@ func CreateCacheDirectoryIfNotPresentAt(dirPath string, dirPerm os.FileMode) err
 			"error closing annonymous temp file, error : (%v)", tempFileErr.Error())
 	}
 
+	return nil
+}
+
+func calculateCRC32(ctx context.Context, reader io.Reader) (uint32, error) {
+	table := crc32.MakeTable(crc32.Castagnoli)
+	checksum := crc32.Checksum([]byte(""), table)
+	buf := make([]byte, BufferSizeForCRC)
+	for {
+		select {
+		case <-ctx.Done():
+			return 0, fmt.Errorf("CRC computation is cancelled: %w", ctx.Err())
+		default:
+			switch n, err := reader.Read(buf); err {
+			case nil:
+				checksum = crc32.Update(checksum, table, buf[:n])
+			case io.EOF:
+				return checksum, nil
+			default:
+				return 0, err
+			}
+		}
+	}
+}
+
+// CalculateFileCRC32 calculates and returns the CRC-32 checksum of a file.
+func CalculateFileCRC32(ctx context.Context, filePath string) (uint32, error) {
+	// Open file with simplified flags and permissions
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("error opening file: %w", err)
+	}
+	defer file.Close() // Ensure file closure
+
+	return calculateCRC32(ctx, file)
+}
+
+// TruncateAndRemoveFile first truncates the file to 0 and then remove (delete)
+// the file at given path.
+func TruncateAndRemoveFile(filePath string) error {
+	// Truncate the file to 0 size, so that even if there are open file handles
+	// and linux doesn't delete the file, the file will not take space.
+	err := os.Truncate(filePath, 0)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(filePath)
+	if err != nil {
+		return err
+	}
 	return nil
 }

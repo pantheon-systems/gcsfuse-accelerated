@@ -24,10 +24,11 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/data"
-	testutil "github.com/googlecloudplatform/gcsfuse/internal/util"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/data"
+	testutil "github.com/googlecloudplatform/gcsfuse/v2/internal/util"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
 	. "github.com/jacobsa/ogletest"
+	"golang.org/x/net/context"
 )
 
 func TestUtil(t *testing.T) { RunTests(t) }
@@ -244,6 +245,95 @@ func (ut *utilTest) Test_IsCacheHandleValid_False() {
 	for _, errMsg := range errMessages {
 		ExpectFalse(IsCacheHandleInvalid(errors.New(errMsg)))
 	}
+}
+
+func (ut *utilTest) Test_CalculateFileCRC32_ShouldReturnCrcForValidFile() {
+	crc, err := CalculateFileCRC32(context.Background(), "testdata/validfile.txt")
+
+	ExpectEq(nil, err)
+	ExpectEq(515179668, crc)
+}
+
+func (ut *utilTest) Test_CalculateFileCRC32_ShouldReturnZeroForEmptyFile() {
+	crc, err := CalculateFileCRC32(context.Background(), "testdata/emptyfile.txt")
+
+	ExpectEq(nil, err)
+	ExpectEq(0, crc)
+}
+
+func (ut *utilTest) Test_CalculateFileCRC32_ShouldReturnErrorForFileNotExist() {
+	crc, err := CalculateFileCRC32(context.Background(), "testdata/nofile.txt")
+
+	ExpectTrue(strings.Contains(err.Error(), "no such file or directory"))
+	ExpectEq(0, crc)
+}
+
+func (ut *utilTest) Test_CalculateFileCRC32_ShouldReturnErrorWhenContextIsCancelled() {
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	cancelFunc()
+	crc, err := CalculateFileCRC32(ctx, "testdata/validfile.txt")
+
+	ExpectTrue(errors.Is(err, context.Canceled))
+	ExpectTrue(strings.Contains(err.Error(), "CRC computation is cancelled"))
+	ExpectEq(0, crc)
+}
+
+func (ut *utilTest) Test_TruncateAndRemoveFile_FileExists() {
+	// Create a file to be deleted.
+	fileName := "temp.txt"
+	file, err := os.Create(fileName)
+	AssertEq(nil, err)
+	_, err = file.WriteString("Writing some data")
+	AssertEq(nil, err)
+	err = file.Close()
+	AssertEq(nil, err)
+
+	err = TruncateAndRemoveFile(fileName)
+
+	ExpectEq(nil, err)
+	// Check the file is deleted.
+	_, err = os.Stat(fileName)
+	ExpectTrue(os.IsNotExist(err), fmt.Sprintf("expected not exist error but got error: %v", err))
+}
+
+func (ut *utilTest) Test_TruncateAndRemoveFile_FileDoesNotExist() {
+	// Create a file to be deleted.
+	fileName := "temp.txt"
+
+	err := TruncateAndRemoveFile(fileName)
+
+	ExpectTrue(os.IsNotExist(err), fmt.Sprintf("expected not exist error but got error: %v", err))
+}
+
+func (ut *utilTest) Test_TruncateAndRemoveFile_OpenedFileDeleted() {
+	// Create a file to be deleted.
+	fileName := "temp.txt"
+	file, err := os.Create(fileName)
+	AssertEq(nil, err)
+	fileString := "Writing some data"
+	_, err = file.WriteString(fileString)
+	AssertEq(nil, err)
+	// Close the file to get the contents synced.
+	err = file.Close()
+	AssertEq(nil, err)
+	// Open the file again
+	file, err = os.Open(fileName)
+	defer func() {
+		_ = file.Close()
+	}()
+	AssertEq(nil, err)
+	fileInfo, err := file.Stat()
+	AssertEq(nil, err)
+	AssertEq(len(fileString), fileInfo.Size())
+
+	// File is not closed and call TruncateAndRemoveFile
+	err = TruncateAndRemoveFile(fileName)
+
+	ExpectEq(nil, err)
+	// The size of open file should be 0.
+	fileInfo, err = file.Stat()
+	ExpectEq(nil, err)
+	ExpectEq(0, fileInfo.Size())
 }
 
 func Test_CreateCacheDirectoryIfNotPresentAt_ShouldNotReturnAnyErrorWhenDirectoryExists(t *testing.T) {

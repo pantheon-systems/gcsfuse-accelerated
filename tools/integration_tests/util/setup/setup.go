@@ -15,6 +15,7 @@
 package setup
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -22,21 +23,24 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/util"
+	"cloud.google.com/go/storage"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/util"
+	"google.golang.org/api/iterator"
 )
 
 var testBucket = flag.String("testbucket", "", "The GCS bucket used for the test.")
 var mountedDirectory = flag.String("mountedDirectory", "", "The GCSFuse mounted directory used for the test.")
 var integrationTest = flag.Bool("integrationTest", false, "Run tests only when the flag value is true.")
 var testInstalledPackage = flag.Bool("testInstalledPackage", false, "[Optional] Run tests on the package pre-installed on the host machine. By default, integration tests build a new package to run the tests.")
-
+var testOnTPCEndPoint = flag.Bool("testOnTPCEndPoint", false, "Run tests on TPC endpoint only when the flag value is true.")
 var seededRand *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 const (
@@ -44,6 +48,7 @@ const (
 	FilePermission_0600 = 0600
 	DirPermission_0755  = 0755
 	Charset             = "abcdefghijklmnopqrstuvwxyz0123456789"
+	PathEnvVariable     = "PATH"
 )
 
 var (
@@ -73,6 +78,10 @@ func TestBucket() string {
 
 func TestInstalledPackage() bool {
 	return *testInstalledPackage
+}
+
+func TestOnTPCEndPoint() bool {
+	return *testOnTPCEndPoint
 }
 
 func MountedDirectory() string {
@@ -146,26 +155,6 @@ func CompareFileContents(t *testing.T, fileName string, fileContent string) {
 	}
 }
 
-func CreateTempFile() string {
-	// A temporary file is created and some lines are added
-	// to it for testing purposes.
-
-	fileName := path.Join(mntDir, "tmpFile")
-	file, err := os.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_DIRECT, FilePermission_0600)
-	if err != nil {
-		LogAndExit(fmt.Sprintf("Error in the opening the file %v", err))
-	}
-
-	defer operations.CloseFile(file)
-
-	_, err = file.WriteString("line 1\nline 2\n")
-	if err != nil {
-		LogAndExit(fmt.Sprintf("Temporary file at %v", err))
-	}
-
-	return fileName
-}
-
 func SetUpTestDir() error {
 	var err error
 	testDir, err = os.MkdirTemp("", "gcsfuse_readwrite_test_")
@@ -183,10 +172,10 @@ func SetUpTestDir() error {
 
 		// mount.gcsfuse will find gcsfuse executable in mentioned locations.
 		// https://github.com/GoogleCloudPlatform/gcsfuse/blob/master/tools/mount_gcsfuse/find.go#L59
-		// Copying the executable to /usr/local/bin
-		err := operations.CopyDirWithRootPermission(binFile, "/usr/local/bin")
+		// Setting PATH so that executable is found in test directory.
+		err := os.Setenv(PathEnvVariable, path.Join(TestDir(), "bin")+string(filepath.ListSeparator)+os.Getenv(PathEnvVariable))
 		if err != nil {
-			log.Printf("Error in copying bin file:%v", err)
+			log.Printf("Error in setting PATH environment variable: %v", err.Error())
 		}
 	} else {
 		// when testInstalledPackage flag is set, gcsfuse is preinstalled on the
@@ -202,17 +191,6 @@ func SetUpTestDir() error {
 		return fmt.Errorf("Mkdir(%q): %v\n", MntDir(), err)
 	}
 	return nil
-}
-
-// Removing bin file after testing.
-func RemoveBinFileCopiedForTesting() {
-	if !TestInstalledPackage() {
-		cmd := exec.Command("sudo", "rm", "/usr/local/bin/gcsfuse")
-		err := cmd.Run()
-		if err != nil {
-			log.Printf("Error in removing file:%v", err)
-		}
-	}
 }
 
 func UnMount() error {
@@ -241,26 +219,33 @@ func GenerateRandomString(length int) string {
 	return string(b)
 }
 
-func UnMountAndThrowErrorInFailure(flags []string, successCode int) {
+func UnMountBucket() {
 	err := UnMount()
 	if err != nil {
 		LogAndExit(fmt.Sprintf("Error in unmounting bucket: %v", err))
 	}
+}
 
-	// Print flag on which test fails
+func SaveLogFileInCaseOfFailure(successCode int) {
 	if successCode != 0 {
-		f := strings.Join(flags, " ")
-		log.Print("Test Fails on " + f)
-
-		// Logfile name will be failed-integration-test-log-xxxxx
-		failedlogsFileName := "failed-integration-test-logs-" + GenerateRandomString(5)
+		// Logfile name will be gcsfuse-failed-integration-test-log-xxxxx
+		failedlogsFileName := "gcsfuse-failed-integration-test-logs-" + GenerateRandomString(5)
 		log.Printf("log file is available on kokoro artifacts with file name: %s", failedlogsFileName)
 		logFileInKokoroArtifact := path.Join(os.Getenv("KOKORO_ARTIFACTS_DIR"), failedlogsFileName)
 		err := operations.CopyFile(logFile, logFileInKokoroArtifact)
 		if err != nil {
 			log.Fatalf("Error in coping logfile in kokoro artifact: %v", err)
 		}
-		return
+	}
+}
+
+func UnMountAndThrowErrorInFailure(flags []string, successCode int) {
+	UnMountBucket()
+	if successCode != 0 {
+		// Print flag on which test fails
+		f := strings.Join(flags, " ")
+		log.Print("Test Fails on " + f)
+		SaveLogFileInCaseOfFailure(successCode)
 	}
 }
 
@@ -294,6 +279,20 @@ func ExitWithFailureIfBothTestBucketAndMountedDirectoryFlagsAreNotSet() {
 
 	if *testBucket == "" && *mountedDirectory == "" {
 		log.Print("--testbucket or --mountedDirectory must be specified")
+		os.Exit(1)
+	}
+}
+
+func ExitWithFailureIfMountedDirectoryIsSetOrTestBucketIsNotSet() {
+	ParseSetUpFlags()
+
+	if *testBucket == "" {
+		log.Print("Please pass the name of bucket to be mounted to --testBucket flag. It is required for this test.")
+		os.Exit(1)
+	}
+
+	if *mountedDirectory != "" {
+		log.Print("Please do not pass the mountedDirectory at test runtime. It is not supported for this test.")
 		os.Exit(1)
 	}
 }
@@ -355,7 +354,7 @@ func CleanUpDir(directoryPath string) {
 
 	for _, d := range dir {
 		err := os.RemoveAll(path.Join([]string{directoryPath, d.Name()}...))
-		if err != nil {
+		if err != nil && !strings.Contains(err.Error(), "no such file or directory") {
 			log.Printf("Error in removing directory: %v", err)
 		}
 	}
@@ -379,11 +378,22 @@ func SetupTestDirectory(testDirName string) string {
 }
 
 // CleanupDirectoryOnGCS cleans up the object/directory path passed in parameter.
-func CleanupDirectoryOnGCS(directoryPathOnGCS string) {
-	_, err := operations.ExecuteGsutilCommandf("rm -rf gs://%s", directoryPathOnGCS)
-	if err != nil {
-		log.Printf("Error while cleaning up directory %s from GCS: %v",
-			directoryPathOnGCS, err)
+func CleanupDirectoryOnGCS(ctx context.Context, client *storage.Client, directoryPathOnGCS string) {
+	bucket, dirPath := GetBucketAndObjectBasedOnTypeOfMount(directoryPathOnGCS)
+	bucketHandle := client.Bucket(bucket)
+
+	it := bucketHandle.Objects(ctx, &storage.Query{Prefix: dirPath + "/"})
+	for {
+		attrs, err := it.Next()
+		if err == iterator.Done {
+			break // No more objects found
+		}
+		if err != nil {
+			log.Fatalf("Error iterating objects: %v", err)
+		}
+		if err := bucketHandle.Object(attrs.Name).Delete(ctx); err != nil {
+			log.Printf("Error deleting object %s: %v", attrs.Name, err)
+		}
 	}
 }
 
@@ -393,4 +403,106 @@ func AreBothMountedDirectoryAndTestBucketFlagsSet() bool {
 	}
 	log.Print("Not running mounted directory tests as both --mountedDirectory and --testBucket flags are not set.")
 	return false
+}
+
+// Explicitly set the enable-hns config flag to true when running tests on the HNS bucket.
+func AddHNSFlagForHierarchicalBucket(ctx context.Context, storageClient *storage.Client) ([]string, error) {
+	attrs, err := storageClient.Bucket(TestBucket()).Attrs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("Error in getting bucket attrs: %w", err)
+	}
+	if attrs.HierarchicalNamespace != nil && !attrs.HierarchicalNamespace.Enabled {
+		return nil, fmt.Errorf("Bucket is not Hierarchical")
+	}
+
+	var flags []string
+	mountConfig4 := config.MountConfig{
+		EnableHNS: true,
+		LogConfig: config.LogConfig{
+			Severity:        config.TRACE,
+			LogRotateConfig: config.DefaultLogRotateConfig(),
+		},
+	}
+	filePath4 := YAMLConfigFile(mountConfig4, "config_hns.yaml")
+	// TODO: Remove --implicit-dirs flag, once the GetFolder API has been successfully implemented.
+	flags = append(flags, "--config-file="+filePath4, "--implicit-dirs")
+	return flags, nil
+}
+
+func separateBucketAndObjectName(bucket, object string) (string, string) {
+	bucketAndObjectPath := strings.SplitN(bucket, "/", 2)
+	bucket = bucketAndObjectPath[0]
+	object = path.Join(bucketAndObjectPath[1], object)
+	return bucket, object
+}
+
+func GetBucketAndObjectBasedOnTypeOfMount(object string) (string, string) {
+	bucket := TestBucket()
+	if strings.Contains(TestBucket(), "/") {
+		// This case arises when we run tests on mounted directory and pass
+		// bucket/directory in testbucket flag.
+		bucket, object = separateBucketAndObjectName(bucket, object)
+	}
+	if dynamicBucketMounted != "" {
+		bucket = dynamicBucketMounted
+	}
+	if OnlyDirMounted() != "" {
+		var suffix string
+		if strings.HasSuffix(object, "/") {
+			suffix = "/"
+		}
+		object = path.Join(OnlyDirMounted(), object) + suffix
+	}
+	return bucket, object
+}
+
+func MountGCSFuseWithGivenMountFunc(flags []string, mountFunc func([]string) error) {
+	if *mountedDirectory == "" {
+		// Mount GCSFuse only when tests are not running on mounted directory.
+		if err := mountFunc(flags); err != nil {
+			LogAndExit(fmt.Sprintf("Failed to mount GCSFuse: %v", err))
+		}
+	}
+}
+
+func UnmountGCSFuseAndDeleteLogFile(rootDir string) {
+	SetMntDir(rootDir)
+	if *mountedDirectory == "" {
+		// Unmount GCSFuse only when tests are not running on mounted directory.
+		err := UnMount()
+		if err != nil {
+			LogAndExit(fmt.Sprintf("Error in unmounting bucket: %v", err))
+		}
+		// delete log file created
+		err = os.Remove(LogFile())
+		if err != nil {
+			LogAndExit(fmt.Sprintf("Error in deleting log file: %v", err))
+		}
+	}
+}
+
+func RunTestsOnlyForStaticMount(mountDir string, t *testing.T) {
+	if strings.Contains(mountDir, *testBucket) || OnlyDirMounted() != "" {
+		log.Println("This test will run only for static mounting...")
+		t.SkipNow()
+	}
+}
+
+// AppendFlagsToAllFlagsInTheFlagsSet appends each flag in newFlags to every flags present in the
+// flagsSet.
+// Input flagsSet: [][]string{{"--x", "--y"}, {"--x", "--z"}}
+// Input newFlags: {"--a", "--b", ""}
+// Output modified flagsSet: [][]string{{"--x", "--y", "--a"}, {"--x", "--z", "--a"},{"--x", "--y", "--b"},{"--x", "--z", "--b"},{"--x", "--y"}, {"--x", "--z"}}
+func AppendFlagsToAllFlagsInTheFlagsSet(flagsSet *[][]string, newFlags ...string) {
+	var resultFlagsSet [][]string
+	for _, flags := range *flagsSet {
+		for _, newFlag := range newFlags {
+			f := flags
+			if strings.Compare(newFlag, "") != 0 {
+				f = append(flags, newFlag)
+			}
+			resultFlagsSet = append(resultFlagsSet, f)
+		}
+	}
+	*flagsSet = resultFlagsSet
 }

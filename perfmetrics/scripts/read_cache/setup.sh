@@ -5,7 +5,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http:#www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -64,7 +64,7 @@ sed -i 's/define \+FIO_IO_U_PLAT_GROUP_NR \+\([0-9]\+\)/define FIO_IO_U_PLAT_GRO
 cd -
 
 # Install and validate go.
-version=1.21.3
+version=1.22.4
 wget -O go_tar.tar.gz https://go.dev/dl/go${version}.linux-amd64.tar.gz -q
 sudo rm -rf /usr/local/go
 tar -xzf go_tar.tar.gz && sudo mv go /usr/local
@@ -79,11 +79,11 @@ export WORKING_DIR=$WD
 echo "export WORKING_DIR=$WD" >> ~/.bashrc
 
 # Install gcsfuse.
-CGO_ENABLED=0 go install github.com/googlecloudplatform/gcsfuse@read_cache_release
+CGO_ENABLED=0 go install github.com/googlecloudplatform/gcsfuse@master
 
 # Clone gcsfuse to get fio load test script.
 if [ ! -d "./gcsfuse" ]; then
-  git clone -b  read_cache_release https://github.com/GoogleCloudPlatform/gcsfuse.git
+  git clone -b  master https://github.com/GoogleCloudPlatform/gcsfuse.git
 fi
 
 # Mount gcsfuse.

@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Installs go1.21 on the container, builds gcsfuse using log_rotation file
+# Installs go1.22.4 on the container, builds gcsfuse using log_rotation file
 # and installs tf-models-official v2.13.2, makes update to include clear_kernel_cache
 # and epochs functionality, and runs the model
 
 # Install go lang
-wget -O go_tar.tar.gz https://go.dev/dl/go1.21.6.linux-amd64.tar.gz -q
+wget -O go_tar.tar.gz https://go.dev/dl/go1.22.4.linux-amd64.tar.gz -q
 sudo rm -rf /usr/local/go && tar -xzf go_tar.tar.gz && sudo mv go /usr/local
 export PATH=$PATH:/usr/local/go/bin
 
@@ -28,7 +28,6 @@ echo "logging:
        " > /tmp/gcsfuse_config.yaml
 nohup gcsfuse/gcsfuse --foreground \
       --implicit-dirs \
-      --max-conns-per-host 100 \
       --stackdriver-export-interval 60s \
       --config-file /tmp/gcsfuse_config.yaml \
       gcsfuse-ml-tf-data myBucket > /home/output/gcsfuse.out 2> /home/output/gcsfuse.err &

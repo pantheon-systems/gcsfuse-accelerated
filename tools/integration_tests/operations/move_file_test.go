@@ -20,17 +20,14 @@ import (
 	"path"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 // Create below directory and file.
 // Test               -- Directory
 // Test/move.txt      -- File
 func createSrcDirectoryAndFile(dirPath string, filePath string, t *testing.T) {
-	// Clean the mountedDirectory before running test.
-	setup.CleanMntDir()
-
 	err := os.Mkdir(dirPath, setup.FilePermission_0600)
 	if err != nil {
 		t.Errorf("Mkdir at %q: %v", dirPath, err)
@@ -53,7 +50,7 @@ func createSrcDirectoryAndFile(dirPath string, filePath string, t *testing.T) {
 
 func checkIfFileMoveOperationSucceeded(srcFilePath string, destDirPath string, t *testing.T) {
 	// Move file from Test/move.txt to destination.
-	err := operations.MoveFile(srcFilePath, destDirPath)
+	err := operations.Move(srcFilePath, destDirPath)
 	if err != nil {
 		t.Errorf("Error in moving file: %v", err)
 	}
@@ -72,7 +69,8 @@ func checkIfFileMoveOperationSucceeded(srcFilePath string, destDirPath string, t
 
 // Move file from Test/move.txt to Test/a/move.txt
 func TestMoveFileWithinSameDirectory(t *testing.T) {
-	dirPath := path.Join(setup.MntDir(), "Test")
+	testDir := setup.SetupTestDirectory(DirForOperationTests)
+	dirPath := path.Join(testDir, "Test")
 	filePath := path.Join(dirPath, MoveFile)
 
 	createSrcDirectoryAndFile(dirPath, filePath, t)
@@ -88,12 +86,13 @@ func TestMoveFileWithinSameDirectory(t *testing.T) {
 
 // Move file from Test/move.txt to Test1/move.txt
 func TestMoveFileWithinDifferentDirectory(t *testing.T) {
-	dirPath := path.Join(setup.MntDir(), "Test")
+	testDir := setup.SetupTestDirectory(DirForOperationTests)
+	dirPath := path.Join(testDir, "Test")
 	filePath := path.Join(dirPath, MoveFile)
 
 	createSrcDirectoryAndFile(dirPath, filePath, t)
 
-	destDirPath := path.Join(setup.MntDir(), "Test2")
+	destDirPath := path.Join(testDir, "Test2")
 	err := os.Mkdir(destDirPath, setup.FilePermission_0600)
 	if err != nil {
 		t.Errorf("Mkdir at %q: %v", destDirPath, err)

@@ -57,27 +57,47 @@ Examples:
 
 # Caching
 
-By default, Cloud Storage FUSE has two forms of optional caching, which are enabled by default: stat and type. However, using Cloud Storage FUSE with either cache forms reduces consistency guarantees.
-They are discussed in this section, along with their trade-offs and the situations in which they are and are not safe to use.
+Cloud Storage FUSE has three forms of optional caching: stat, type, and file. Stat and type caches are enabled by default. Using Cloud Storage FUSE with file caching, stat caching, or type caching enabled can significantly increase performance but reduces consistency guarantees.
+The different forms of caching are discussed in this section, along with their trade-offs and the situations in which they are and are not safe to use.
 
 The default behavior is appropriate, and brings significant performance benefits, when the bucket is never modified or is modified only via a single Cloud Storage FUSE mount. If you are using Cloud Storage FUSE in a situation where multiple actors will be modifying a bucket, be sure to read the rest of this section carefully and consider disabling caching.
 
-Important: The rest of this document assumes that caching is disabled (by setting ```--stat-cache-ttl 0``` and ```--type-cache-ttl 0```). This is not the default. If you want the consistency guarantees discussed in this document, you must use these options to disable caching.
+**Important**: The rest of this document assumes that caching is disabled (by setting ```--stat-cache-ttl 0``` and ```--type-cache-ttl 0``` or ```metadata-cache:ttl-secs: 0```). This is not the default. If you want the consistency guarantees discussed in this document, you must use these options to disable caching. 
 
 **Stat caching**
 
 The cost of the consistency guarantees discussed in the rest of this document is that Cloud Storage FUSE must frequently send stat object requests to Cloud Storage in order to get the freshest possible answer for the kernel when it asks about a particular name or inode, which happens frequently. This can make what appear to the user to be simple operations, like ```ls -l```, take quite a long time.
 
-To alleviate this slowness, Cloud Storage FUSE supports using cached data where it would otherwise send a stat object request to Cloud Storage, saving some round trips. This behavior is controlled by the ```--stat-cache-ttl``` flag, which can be set to a value like ```10s``` or ```1.5h```. The default is one minute. Positive and negative stat results will be cached for the specified amount of time.
+To alleviate this slowness, Cloud Storage FUSE supports using cached data where it would otherwise send a stat object request to Cloud Storage, saving some round trips. Caching these can help with file system performance, since otherwise the kernel must send a request for inode attributes to Cloud Storage FUSE for each call to ```write(2)```, ```stat(2)```, and others.
 
-```--stat-cache-ttl``` also controls the duration for which Cloud Storage FUSE allows the kernel to cache inode attributes. Caching these can help with file system performance, since otherwise the kernel must send a request for inode attributes to Cloud Storage FUSE for each call to ```write(2)```, ```stat(2)```, and others.
+The behavior of stat cache is controlled by the following flags/config parameters:
 
-The size of the stat cache can also be configured with ```--stat-cache-capacity```. By default the stat cache will hold up to 4096 items. If you have folders containing more than 4096 items (folders or files) you may want to increase this, otherwise the caching will not function properly when listing that folder's contents:
-- ListObjects will return information on the items within the folder. Each item's data is cached
-- Because there are more objects than cache capacity, the earliest entries will be evicted
-- The linux kernel then asks for a little more information on each file.
-- As the earliest cache entries were evicted, this is a fresh GetObjectDetails request
-- This cycle repeats and sends a GetObjectDetails request for every item in the folder, as though caching were disabled
+1. **Stat-cache size**: It controls the maximum memory-size of the stat-cache entries. It can be configured in the following ways.
+   - `metadata-cache:stat-cache-max-size-mb`: This is an integer parameter set through the config-file. It sets the stat-cache size in MBs. This can be set to -1 for infinite stat-cache size, 0 for disabling stat-cache, and > 0 for setting a finite stat-cache size. Values below -1 will return error on mounting.
+   If this is missing, then `--stat-cache-capacity` is used.
+   - `--stat-cache-capacity`: This is an integer commandline flag. It sets the stat-cache size in count.
+   This has been deprecated (starting v2.0) and is ignored if the user sets `metadata-cache:stat-cache-max-size-mb` .
+   This can be set to 0 for disabling stat-cache and > 0 for setting a finite stat-cache size.
+
+   If neither of these two is set, then a size of 32MB is used, which is
+   equivalent to about 20460 stat-cache entries (assuming just as many negative
+   stat-cache entries).
+
+   If you have more objects (folders or files) than that in your bucket that you
+   want to access, then you may want to increase this, otherwise the caching
+   will not function properly when listing that folder's contents:
+    - ListObjects will return information on the items within the folder. Each item's data is cached
+    - Because there are more objects than cache capacity, the earliest entries will be evicted
+    - The linux kernel then asks for a little more information on each file.
+    - As the earliest cache entries were evicted, this is a fresh GetObjectDetails request
+    - This cycle repeats and sends a GetObjectDetails request for every item in the folder, as though caching were disabled
+
+2. **Stat-cache TTL**: It controls the duration for which Cloud Storage FUSE allows the kernel to cache inode attributes. It can be set in one of the following two ways.
+   * ```metadata-cache: ttl-secs``` in the config-file. This is set as an integer, which sets the TTL in seconds. If this is -1, TTL is taken as infinite i.e. no-TTL based expirations of entries. If this is 0, that disables the stat-cache.
+   If this config variable is missing, then the value of ```--stat-cache-ttl``` is used.
+   * ```--stat-cache-ttl``` commandline flag, which can be set to a value like ```10s``` or ```1.5h```. The default is one minute. This has been deprecated (starting v2.0) and is currently only available for backward compatibility. If ```metadata-cache: ttl-secs``` is set, ```--stat-cache-ttl``` is ignored.
+   
+   Positive and negative stat results will be cached for the specified amount of time.
 
 Warning: Using stat caching breaks the consistency guarantees discussed in this document. It is safe only in the following situations:
 - The mounted bucket is never modified.
@@ -88,18 +108,66 @@ Warning: Using stat caching breaks the consistency guarantees discussed in this 
 
 Because Cloud Storage does not forbid an object named ```foo``` from existing next to an object named ```foo/``` (see the Name conflicts section), when Cloud Storage FUSE is asked to look up the name "foo" it must stat both objects.
 
-Stat cache enabled with ```--stat-cache-ttl``` can help with this, but it does not help until after the first request. For example, assume that there is an object named foo but not one named ```foo/```, and the stat cache is enabled. When the user runs ```ls -l```, the following happens:
+Stat cache can help with this, but it does not help until after the first request. For example, assume that there is an object named foo but not one named ```foo/```, and the stat cache is enabled. When the user runs ```ls -l```, the following happens:
 - The objects in the bucket are listed. This causes a stat cache entry for ```foo``` to be created.
 - ```ls``` asks to stat the name ```foo```, causing a lookup request to be sent for that name.
 - Cloud Storage FUSE sends Cloud Storage stat requests for the object named ```foo``` and the object named ```foo/```. The first will hit in the stat cache, but the second will have to go all the way to Cloud Storage to receive a negative result.
 
 The negative result for ```foo/``` will be cached, but that only helps with the second invocation of ```ls -l```.
 
-To alleviate this, Cloud Storage FUSE supports a "type cache" on directory inodes. When ```--type-cache-ttl``` is set, each directory inode will maintain a mapping from the name of its children to whether those children are known to be files or directories or both. When a child is looked up, if the parent's cache says that the child is a file but not a directory, only one Cloud Storage object will need to be stated. Similarly if the child is a directory but not a file.
+To alleviate this, Cloud Storage FUSE supports a "type cache" on directory inodes. When type cache is enabled, each directory inode will maintain a mapping from the name of its children to whether those children are known to be files or directories or both. When a child is looked up, if the parent's cache says that the child is a file but not a directory, only one Cloud Storage object will need to be stated. Similarly if the child is a directory but not a file.
 
-Warning: Using type caching breaks the consistency guarantees discussed in this document. It is safe only in the following situations:
+The behavior of type cache is controlled by the following flags/config parameters:
+1. **Type-cache size**: This is configurable at per-directory level by setting `metadata-cache: type-cache-max-size-mb` in config-file. This is the maximum size of type-cache per-directory in MiBs. By default, this is set at 4, which roughly equates to about 21k entries.
+1. **Type-cache TTL**: It controls the duration for which Cloud Storage FUSE caches an inode's type attribute. It can be set in one of the following two ways.
+* ```metadata-cache: ttl-secs``` in the config-file. This is set as an integer, which sets the TTL in seconds. If this is -1, TTL is taken as infinite i.e. no-TTL based expirations of entries. If this is 0, that disables the type-cache. If this is <-1, then an error is thrown on mount.
+- ```--type-cache-ttl``` commandline flag, which can be set to a value like ```10s``` or ```1.5h```. The default is one minute. This has been deprecated (starting v2.0) and is currently only available for backward compatibility. If ```metadata-cache: ttl-secs``` is set, ```--type-cache-ttl``` is ignored.
+
+**Warning**: Using type caching breaks the consistency guarantees discussed in this document. It is safe only in the following situations:
 - The mounted bucket is never modified.
 - The type (file or directory) for any given path never changes.
+
+**File caching**
+
+The Cloud Storage FUSE file cache feature is a client-based read cache that lets repeat file reads to be served from a faster local cache storage media of your choice.
+
+The behavior of file cache is controlled by the following config-file parameters:
+
+1. **cache-dir**: Specifies the directory to use for the file cache. Passing a path to a directory enables the file cache feature.
+
+2. **file-cache: max-file-size-mb**: is the maximum size in MiB that the file cache can use. This is useful if you want to limit the total capacity the Cloud Storage FUSE cache can use within its mounted directory.
+   - Use the default value of -1 to use the cache's entire available capacity in the directory you specify for cache-dir.
+   - Use a value of 0 to disable the file cache.
+   - The eviction of cached metadata and data is based on a least recently used (LRU) algorithm that begins once the space threshold configured per max-size-mb limit is reached.     
+
+3. **file-cache: cache-file-for-range-read**: is a boolean that determines whether the full object should be downloaded asynchronously and stored in the Cloud Storage FUSE cache directory when the first read is done from a non-zero offset. This should be set to 'true' if you plan on performing several random reads or partial reads. The default value is 'false'
+   - If doing a partial read starting at offset 0, Cloud Storage FUSE always asynchronously downloads and caches the full object.
+
+4. **metadata-cache: ttl-secs**: As mentioned above, defines the time to live (TTL), in seconds, of metadata entries used for the stat, type, and the file cache.  Apart from specifying a value that represents the number of seconds, the ttl-secs flag also supports the values of 0 and -1: 
+   - Use a value of -1 to bypass a TTL expiration and serve the file from the cache whenever it's available. Serving files without checking for consistency can serve inconsistent data, and should only be used temporarily for workloads that run in jobs with non-changing data. For example, using a value of -1 is useful for machine learning training, where the same data is read across multiple epochs without changes.
+   - Use a value of 0 to ensure that the most up to date file is read. Using a value of 0 issues a Get metadata call to make sure that the object generation for the file in the cache matches what's stored in Cloud Storage. 
+
+Additional file cache [behavior](https://cloud.google.com/storage/docs/gcsfuse-cache):
+1. **Persistence**: Cloud Storage FUSE caches aren't persisted on unmounts and restart when all metadata entries are evicted. However, data in the file cache isn't evicted and should be deleted by the user, or can be reused in subsequent mount operations once the metadata has been populated again.
+
+2. **Security**: When you enable caching, Cloud Storage FUSE uses the specified 'cache-dir' you set as the underlying directory for the cache to persist files from your Cloud Storage bucket in an unencrypted format. Any user or process that has access to this cache directory can access these files. We recommend that you restrict access to this directory.
+
+3. **Direct or multiple access to the file cache**: Using a process other than Cloud Storage FUSE to access or modify a file in the cache directory can lead to data corruption. Cloud Storage FUSE caches are specific to each Cloud Storage FUSE running process with no awareness across different Cloud Storage FUSE processes running on the same or different machines. Subsequently, the same cache directory shouldn't be used by different Cloud Storage FUSE processes.
+
+4. **Eviction**: The eviction of cached metadata and data is based on a least recently used (LRU) algorithm that begins once the space threshold configured per max-size-mb limit is reached.
+
+5. **Invalidation**: File cache data is invalidated per the set 'metadata-cache: ttl-secs' value:
+   - If a file cache entry hasn't yet expired based on its TTL and the file is in the cache, the entire operation is served from the local client cache without any request being issued to Cloud Storage.
+
+   - If a file cache entry has expired based on its TTL, a Get metadata call is first made to Cloud Storage, and if the file isn't in the cache, the file is retrieved from Cloud Storage. Both operations are subject to network latencies. If the metadata entry has been invalidated, but the file is in the cache, and its object generation has not changed, the file is served from the cache only after the Get metadata call is made to check if the data is valid.
+
+   - If a Cloud Storage FUSE client modifies a cached file or its metadata, then the file is immediately invalidated and consistency is ensured in the following read by the same client. However, if different clients access the same file or its metadata, and its entries are cached, then the cached version of the file or metadata is read and not the updated version until the file is invalidated by that specific client's TTL setting.     
+
+**Note**: 
+
+1. ```--stat-cache-ttl``` and ```--type-cache-ttl``` have been deprecated (starting v2.0) and only ```metadata-cache: ttl-secs``` in the gcsfuse config-file will be supported. So, it is recommended to switch from these two to ```metadata-cache: ttl-secs```.
+For now, for backward compatibility, both are accepted, and the minimum of the two, rounded to the next higher multiple of a second, is used as TTL for both stat-cache and type-cache, when ```metadata-cache: ttl-secs``` is not set.
+1. Both stat-cache and type-cache internally use the same TTL.
 
 # Files and Directories
 
@@ -131,21 +199,21 @@ Even though A/, A/B/, and C/ are directories in the filesystem, a 0-byte object 
 
 The above example was based on greenfield deployments which assumes starting fresh, where the directories are created from Cloud Storage FUSE. If a user unmounts this Cloud Storage FUSE bucket, and then re-mounts it to a different path, the user will see the directory structure correctly in the filesystem because it was originally created by Cloud Storage FUSE.
 
-However, If a user already has objects with prefixes to simulate a directory structure in their buckets that did not originate from Cloud Storage FUSE, and mounts the bucket using Cloud Storage FUSE, the directories and objects under the directories will not be visible until a user manually creates the directory using mkdir on the local instance. This is because with Cloud Storage FUSE, directories are by default not implicitly defined; they exist only if a matching object ending in a slash exists.
+However, if a user already has objects with prefixes to simulate a directory structure in their buckets that did not originate from Cloud Storage FUSE, and mounts the bucket using Cloud Storage FUSE, the directories and objects under the directories will not be visible until a user manually creates the directory, with the same name, using mkdir on the local instance. This is because with Cloud Storage FUSE, directories are by default not implicitly defined; they exist only if a matching object ending in a slash exists.  These backing objects for directories are special 0-byte objects which are placeholders for directories. Note that these can also be created via the WebUI and Cloud Storage SDKs, but not by the Cloud Storage CLI tools such as gcloud or gsutil.
 
+If a user has the following objects in their Cloud Storage buckets, for example created by uploading a local directory using `gsutil cp -r` command.
+- A/1.txt
+- A/B/2.txt
+- C/3.txt
 
-So if a user has the following objects in their Cloud Storage buckets, that were not originally created via Cloud Storage FUSE (for example created by uploading a local directory using ``` gsutil cp -r``` command)
-
+then mounting the bucket and running ```ls``` to see its content will not show any files until placeholder directory objects A/, A/B/, and C/ are created in the GCS bucket. These placeholder directory objects can be created by running `mkdir ./A`, `mkdir ./A/B` and `mkdir ./C` on GCSFuse mounted directory.
+At which point the user will correctly see:
 - A/
 - A/1.txt
 - A/B/
 - A/B/2.txt
 - C/
 - C/3.txt
-
-then mounting the bucket and running ```ls``` to see its content will not show any files until the directories A/, A/B/, and C/ are created on the local filesystem using the ```mkdir``` command.
-
-This is the default behavior, unless a user passes the ```--implicit-dirs``` flag.
 
 **Using ```--implicit-dirs``` flag:**
 
@@ -158,7 +226,7 @@ However, implicit directories does have drawbacks:
 - With the example above, it will appear as if there is a directory called "A/" containing a file called "1.txt". But when the user runs ‘rm A/1.txt’, it will appear as if the file system is completely empty. This is contrary to expectations, since the user hasn't run ```rmdir A/```.
 - Cloud Storage FUSE sends a single Objects.list request to Cloud Storage, and treats the directory as being implicitly defined if the results are non-empty. In rare cases (notably when many objects have recently been deleted) Objects.list may return an arbitrary number of empty responses with continuation tokens, even for a non-empty name range. In order to bound the number of requests, Cloud Storage FUSE simply ignores this subtlety. Therefore in rare cases an implicitly defined directory will fail to appear.
 
-Alternatively, users can create a script which lists the buckets and creates the appropriate objects for the directories so that the ```--implicit-dirs``` flag is not used. 
+Alternatively, users can create a script which lists the buckets and creates the appropriate objects for the directories so that the ```--implicit-dirs``` flag is not used.
 
 # Generations
 
@@ -176,11 +244,7 @@ When a new file is created and ```open(2)``` was called with ```O_CREAT```, an e
 
 **Pubsub notifications on file creation**
 
-[Pubsub notifications](https://cloud.google.com/storage/docs/reporting-changes) may be enabled on a Cloud Storage bucket to help track changes to Cloud Storage objects. Due to the semantics that Cloud Storage FUSE uses to create files, 3 different events are generated, per file created:
-
-- One OBJECT_FINALIZE event: a zero sized object has been created.
-- One OBJECT_DELETE event: the first generation of the object has been deleted.
-- One OBJECT_FINALIZE event: a non-zero sized object has been created.
+[Pubsub notifications](https://cloud.google.com/storage/docs/reporting-changes) may be enabled on a Cloud Storage bucket to help track changes to Cloud Storage objects. Due to the semantics that Cloud Storage FUSE uses to create files, an OBJECT_FINALIZE event is generated per file created indicating that a non-zero sized object has been created.
 
 These Cloud Storage events can be used from other cloud products, such as AppEngine, Cloud Functions, etc. It is recommended to ignore events for files with zero size.
 

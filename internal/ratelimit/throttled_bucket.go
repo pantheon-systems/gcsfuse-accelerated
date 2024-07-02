@@ -17,7 +17,8 @@ package ratelimit
 import (
 	"io"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
 	"golang.org/x/net/context"
 )
 
@@ -48,6 +49,10 @@ type throttledBucket struct {
 
 func (b *throttledBucket) Name() string {
 	return b.wrapped.Name()
+}
+
+func (b *throttledBucket) BucketType() gcs.BucketType {
+	return b.wrapped.BucketType()
 }
 
 func (b *throttledBucket) NewReader(
@@ -122,7 +127,7 @@ func (b *throttledBucket) ComposeObjects(
 
 func (b *throttledBucket) StatObject(
 	ctx context.Context,
-	req *gcs.StatObjectRequest) (o *gcs.Object, err error) {
+	req *gcs.StatObjectRequest) (m *gcs.MinObject, e *gcs.ExtendedObjectAttributes, err error) {
 	// Wait for permission to call through.
 	err = b.opThrottle.Wait(ctx, 1)
 	if err != nil {
@@ -130,7 +135,7 @@ func (b *throttledBucket) StatObject(
 	}
 
 	// Call through.
-	o, err = b.wrapped.StatObject(ctx, req)
+	m, e, err = b.wrapped.StatObject(ctx, req)
 
 	return
 }
@@ -178,6 +183,32 @@ func (b *throttledBucket) DeleteObject(
 	err = b.wrapped.DeleteObject(ctx, req)
 
 	return
+}
+
+func (b *throttledBucket) DeleteFolder(ctx context.Context, folderName string) (err error) {
+	// Wait for permission to call through.
+	err = b.opThrottle.Wait(ctx, 1)
+	if err != nil {
+		return
+	}
+
+	// Call through.
+	err = b.wrapped.DeleteFolder(ctx, folderName)
+
+	return
+}
+
+func (b *throttledBucket) GetFolder(ctx context.Context, folderName string) (folder *controlpb.Folder, err error) {
+	// Wait for permission to call through.
+	err = b.opThrottle.Wait(ctx, 1)
+	if err != nil {
+		return
+	}
+
+	// Call through.
+	folder, err = b.wrapped.GetFolder(ctx, folderName)
+
+	return folder, err
 }
 
 ////////////////////////////////////////////////////////////////////////

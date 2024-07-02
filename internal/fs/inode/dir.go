@@ -21,10 +21,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/metadata"
-	"github.com/googlecloudplatform/gcsfuse/internal/gcsx"
-	"github.com/googlecloudplatform/gcsfuse/internal/locker"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/metadata"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/gcsx"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/locker"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/storageutil"
 	"github.com/jacobsa/fuse/fuseops"
 	"github.com/jacobsa/fuse/fuseutil"
 	"github.com/jacobsa/syncutil"
@@ -95,7 +96,7 @@ type DirInode interface {
 	// Like CreateChildFile, except clone the supplied source object instead of
 	// creating an empty object.
 	// Return the full name of the child and the GCS object it backs up.
-	CloneToChildFile(ctx context.Context, name string, src *gcs.Object) (*Core, error)
+	CloneToChildFile(ctx context.Context, name string, src *gcs.MinObject) (*Core, error)
 
 	// Create a symlink object with the supplied (relative) name and the supplied
 	// target, failing with *gcs.PreconditionError if a backing object already
@@ -131,6 +132,23 @@ type DirInode interface {
 	// LocalFileEntries lists the local files present in the directory.
 	// Local means that the file is not yet present on GCS.
 	LocalFileEntries(localFileInodes map[Name]Inode) (localEntries []fuseutil.Dirent)
+
+	// LockForChildLookup takes appropriate kind of lock when an inode's child is
+	// looked up.
+	LockForChildLookup()
+
+	// UnlockForChildLookup unlocks the lock taken with LockForChildLookup.
+	UnlockForChildLookup()
+
+	// ShouldInvalidateKernelListCache tells the filesystem whether kernel list-cache
+	// should be invalidated or not.
+	ShouldInvalidateKernelListCache(ttl time.Duration) bool
+
+	// RLock readonly lock.
+	RLock()
+
+	// RUnlock readonly unlock.
+	RUnlock()
 }
 
 // An inode that represents a directory from a GCS bucket.
@@ -167,9 +185,9 @@ type dirInode struct {
 	// Mutable state
 	/////////////////////////
 
-	// A mutex that must be held when calling certain methods. See documentation
-	// for each method.
-	mu locker.Locker
+	// A RW mutex that must be held when calling certain methods. See
+	// documentation for each method.
+	mu locker.RWLocker
 
 	// GUARDED_BY(mu)
 	lc lookupCount
@@ -178,6 +196,12 @@ type dirInode struct {
 	//
 	// GUARDED_BY(mu)
 	cache metadata.TypeCache
+
+	// prevDirListingTimeStamp is the time stamp of previous listing when user asked
+	// (via kernel) the directory listing from the filesystem.
+	// Specially used when kernelListCacheTTL > 0 that means kernel list-cache is
+	// enabled.
+	prevDirListingTimeStamp *time.Time
 }
 
 var _ DirInode = &dirInode{}
@@ -219,22 +243,22 @@ func NewDirInode(
 	}
 
 	typed := &dirInode{
-		bucket:                     bucket,
-		mtimeClock:                 mtimeClock,
-		cacheClock:                 cacheClock,
-		id:                         id,
-		implicitDirs:               implicitDirs,
+		bucket:                      bucket,
+		mtimeClock:                  mtimeClock,
+		cacheClock:                  cacheClock,
+		id:                          id,
+		implicitDirs:                implicitDirs,
 		enableManagedFoldersListing: enableManagedFoldersListing,
-		enableNonexistentTypeCache: enableNonexistentTypeCache,
-		name:                       name,
-		attrs:                      attrs,
-		cache:                      metadata.NewTypeCache(typeCacheMaxSizeMB, typeCacheTTL),
+		enableNonexistentTypeCache:  enableNonexistentTypeCache,
+		name:                        name,
+		attrs:                       attrs,
+		cache:                       metadata.NewTypeCache(typeCacheMaxSizeMB, typeCacheTTL),
 	}
 
 	typed.lc.Init(id)
 
 	// Set up invariant checking.
-	typed.mu = locker.New(name.GcsObjectName(), typed.checkInvariants)
+	typed.mu = locker.NewRW(name.GcsObjectName(), typed.checkInvariants)
 
 	d = typed
 	return
@@ -300,7 +324,7 @@ func findExplicitInode(ctx context.Context, bucket *gcsx.SyncerBucket, name Name
 		Name: name.GcsObjectName(),
 	}
 
-	o, err := bucket.StatObject(ctx, req)
+	m, _, err := bucket.StatObject(ctx, req)
 
 	// Suppress "not found" errors.
 	var gcsErr *gcs.NotFoundError
@@ -314,9 +338,9 @@ func findExplicitInode(ctx context.Context, bucket *gcsx.SyncerBucket, name Name
 	}
 
 	return &Core{
-		Bucket:   bucket,
-		FullName: name,
-		Object:   o,
+		Bucket:    bucket,
+		FullName:  name,
+		MinObject: m,
 	}, nil
 }
 
@@ -345,7 +369,7 @@ func findDirInode(ctx context.Context, bucket *gcsx.SyncerBucket, name Name) (*C
 		FullName: name,
 	}
 	if o := listing.Objects[0]; o.Name == name.GcsObjectName() {
-		result.Object = o
+		result.MinObject = storageutil.ConvertObjToMinObject(o)
 	}
 	return result, nil
 }
@@ -383,6 +407,27 @@ func (d *dirInode) Lock() {
 
 func (d *dirInode) Unlock() {
 	d.mu.Unlock()
+}
+
+func (d *dirInode) RLock() {
+	d.mu.RLock()
+}
+
+func (d *dirInode) RUnlock() {
+	d.mu.RUnlock()
+}
+
+// LockForChildLookup takes read-only lock on inode when the inode's child is
+// looked up. It is safe to take read-only lock to allow parallel lookups of
+// children because (a) during lookup, GCS is only read (list/stat), so as long
+// as GCS is not changed remotely, lookup will be consistent (b) all the other
+// directory level operations (read or write type) take exclusive locks.
+func (d *dirInode) LockForChildLookup() {
+	d.mu.RLock()
+}
+
+func (d *dirInode) UnlockForChildLookup() {
+	d.mu.RUnlock()
 }
 
 func (d *dirInode) ID() fuseops.InodeID {
@@ -460,9 +505,9 @@ func (d *dirInode) LookUpChild(ctx context.Context, name string) (*Core, error) 
 	switch cachedType {
 	case metadata.ImplicitDirType:
 		dirResult = &Core{
-			Bucket:   d.Bucket(),
-			FullName: NewDirName(d.Name(), name),
-			Object:   nil,
+			Bucket:    d.Bucket(),
+			FullName:  NewDirName(d.Name(), name),
+			MinObject: nil,
 		}
 	case metadata.ExplicitDirType:
 		b.Add(lookUpExplicitDir)
@@ -524,9 +569,9 @@ func (d *dirInode) ReadDescendants(ctx context.Context, limit int) (map[Name]*Co
 			}
 			name := NewDescendantName(d.Name(), o.Name)
 			descendants[name] = &Core{
-				Bucket:   d.Bucket(),
-				FullName: name,
-				Object:   o,
+				Bucket:    d.Bucket(),
+				FullName:  name,
+				MinObject: storageutil.ConvertObjToMinObject(o),
 			}
 		}
 
@@ -583,17 +628,17 @@ func (d *dirInode) readObjects(
 		if strings.HasSuffix(o.Name, "/") {
 			dirName := NewDirName(d.Name(), nameBase)
 			explicitDir := &Core{
-				Bucket:   d.Bucket(),
-				FullName: dirName,
-				Object:   o,
+				Bucket:    d.Bucket(),
+				FullName:  dirName,
+				MinObject: storageutil.ConvertObjToMinObject(o),
 			}
 			cores[dirName] = explicitDir
 		} else {
 			fileName := NewFileName(d.Name(), nameBase)
 			file := &Core{
-				Bucket:   d.Bucket(),
-				FullName: fileName,
-				Object:   o,
+				Bucket:    d.Bucket(),
+				FullName:  fileName,
+				MinObject: storageutil.ConvertObjToMinObject(o),
 			}
 			cores[fileName] = file
 		}
@@ -615,9 +660,9 @@ func (d *dirInode) readObjects(
 		}
 
 		implicitDir := &Core{
-			Bucket:   d.Bucket(),
-			FullName: dirName,
-			Object:   nil,
+			Bucket:    d.Bucket(),
+			FullName:  dirName,
+			MinObject: nil,
 		}
 		cores[dirName] = implicitDir
 	}
@@ -649,6 +694,9 @@ func (d *dirInode) ReadEntries(
 		}
 		entries = append(entries, entry)
 	}
+
+	nowTime := d.cacheClock.Now()
+	d.prevDirListingTimeStamp = &nowTime
 	return
 }
 
@@ -663,12 +711,13 @@ func (d *dirInode) CreateChildFile(ctx context.Context, name string) (*Core, err
 	if err != nil {
 		return nil, err
 	}
+	m := storageutil.ConvertObjToMinObject(o)
 
 	d.cache.Insert(d.cacheClock.Now(), name, metadata.RegularFileType)
 	return &Core{
-		Bucket:   d.Bucket(),
-		FullName: fullName,
-		Object:   o,
+		Bucket:    d.Bucket(),
+		FullName:  fullName,
+		MinObject: m,
 	}, nil
 }
 
@@ -676,15 +725,15 @@ func (d *dirInode) CreateLocalChildFile(name string) (*Core, error) {
 	fullName := NewFileName(d.Name(), name)
 
 	return &Core{
-		Bucket:   d.Bucket(),
-		FullName: fullName,
-		Object:   nil,
-		Local:    true,
+		Bucket:    d.Bucket(),
+		FullName:  fullName,
+		MinObject: nil,
+		Local:     true,
 	}, nil
 }
 
 // LOCKS_REQUIRED(d)
-func (d *dirInode) CloneToChildFile(ctx context.Context, name string, src *gcs.Object) (*Core, error) {
+func (d *dirInode) CloneToChildFile(ctx context.Context, name string, src *gcs.MinObject) (*Core, error) {
 	// Erase any existing type information for this name.
 	d.cache.Erase(name)
 	fullName := NewFileName(d.Name(), name)
@@ -701,11 +750,12 @@ func (d *dirInode) CloneToChildFile(ctx context.Context, name string, src *gcs.O
 	if err != nil {
 		return nil, err
 	}
+	m := storageutil.ConvertObjToMinObject(o)
 
 	c := &Core{
-		Bucket:   d.Bucket(),
-		FullName: fullName,
-		Object:   o,
+		Bucket:    d.Bucket(),
+		FullName:  fullName,
+		MinObject: m,
 	}
 	d.cache.Insert(d.cacheClock.Now(), name, c.Type())
 	return c, nil
@@ -722,13 +772,14 @@ func (d *dirInode) CreateChildSymlink(ctx context.Context, name string, target s
 	if err != nil {
 		return nil, err
 	}
+	m := storageutil.ConvertObjToMinObject(o)
 
 	d.cache.Insert(d.cacheClock.Now(), name, metadata.SymlinkType)
 
 	return &Core{
-		Bucket:   d.Bucket(),
-		FullName: fullName,
-		Object:   o,
+		Bucket:    d.Bucket(),
+		FullName:  fullName,
+		MinObject: m,
 	}, nil
 }
 
@@ -739,13 +790,14 @@ func (d *dirInode) CreateChildDir(ctx context.Context, name string) (*Core, erro
 	if err != nil {
 		return nil, err
 	}
+	m := storageutil.ConvertObjToMinObject(o)
 
 	d.cache.Insert(d.cacheClock.Now(), name, metadata.ExplicitDirType)
 
 	return &Core{
-		Bucket:   d.Bucket(),
-		FullName: fullName,
-		Object:   o,
+		Bucket:    d.Bucket(),
+		FullName:  fullName,
+		MinObject: m,
 	}, nil
 }
 
@@ -779,32 +831,44 @@ func (d *dirInode) DeleteChildFile(
 func (d *dirInode) DeleteChildDir(
 	ctx context.Context,
 	name string,
-	isImplicitDir bool) (err error) {
+	isImplicitDir bool) error {
 	d.cache.Erase(name)
 
 	// if the directory is an implicit directory, then no backing object
 	// exists in the gcs bucket, so returning from here.
-	if isImplicitDir {
-		return
+	// Hierarchical buckets don't have implicit dirs.
+	if isImplicitDir && d.bucket.BucketType() != gcs.Hierarchical {
+		return nil
 	}
+
 	childName := NewDirName(d.Name(), name)
 
 	// Delete the backing object. Unfortunately we have no way to precondition
 	// this on the directory being empty.
-	err = d.bucket.DeleteObject(
+	err := d.bucket.DeleteObject(
 		ctx,
 		&gcs.DeleteObjectRequest{
 			Name:       childName.GcsObjectName(),
 			Generation: 0, // Delete the latest version of object named after dir.
 		})
 
-	if err != nil {
-		err = fmt.Errorf("DeleteObject: %w", err)
-		return
+	if d.bucket.BucketType() != gcs.Hierarchical {
+		if err != nil {
+			return fmt.Errorf("DeleteObject: %w", err)
+		}
+		d.cache.Erase(name)
+		return nil
 	}
-	d.cache.Erase(name)
 
-	return
+	// Ignoring delete object error here, as in case of hns there is no way of knowing
+	// if underlying placeholder object exists or not in Hierarchical bucket.
+	// The DeleteFolder operation handles removing empty folders.
+	if err = d.bucket.DeleteFolder(ctx, childName.GcsObjectName()); err != nil {
+		return fmt.Errorf("DeleteFolder: %w", err)
+	}
+
+	d.cache.Erase(name)
+	return nil
 }
 
 // LOCKS_REQUIRED(fs)
@@ -826,4 +890,15 @@ func (d *dirInode) LocalFileEntries(localFileInodes map[Name]Inode) (localEntrie
 		}
 	}
 	return
+}
+
+func (d *dirInode) ShouldInvalidateKernelListCache(ttl time.Duration) bool {
+	// prevDirListingTimeStamp = nil means listing has not happened yet, and we should
+	// invalidate for clean start.
+	if d.prevDirListingTimeStamp == nil {
+		return true
+	}
+
+	cachedDuration := d.cacheClock.Now().Sub(*d.prevDirListingTimeStamp)
+	return cachedDuration >= ttl
 }

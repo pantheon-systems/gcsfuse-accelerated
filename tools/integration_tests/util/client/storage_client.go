@@ -19,57 +19,57 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"path"
+	"os"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-
 	"cloud.google.com/go/storage"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
+	storagev1 "google.golang.org/api/storage/v1"
 )
 
-func separateBucketAndObjectName(bucket, object *string) {
-	bucketAndObjectPath := strings.SplitN(*bucket, "/", 2)
-	*bucket = bucketAndObjectPath[0]
-	*object = path.Join(bucketAndObjectPath[1], *object)
-}
-
-func setBucketAndObjectBasedOnTypeOfMount(bucket, object *string) {
-	*bucket = setup.TestBucket()
-	if strings.Contains(setup.TestBucket(), "/") {
-		// This case arises when we run tests on mounted directory and pass
-		// bucket/directory in testbucket flag.
-		separateBucketAndObjectName(bucket, object)
-	}
-	if setup.DynamicBucketMounted() != "" {
-		*bucket = setup.DynamicBucketMounted()
-	}
-	if setup.OnlyDirMounted() != "" {
-		var suffix string
-		if strings.HasSuffix(*object, "/") {
-			suffix = "/"
-		}
-		*object = path.Join(setup.OnlyDirMounted(), *object) + suffix
-	}
-}
-
-func CreateStorageClient(ctx context.Context) (*storage.Client, error) {
+func CreateStorageClient(ctx context.Context) (client *storage.Client, err error) {
 	// Create new storage client.
-	client, err := storage.NewClient(ctx)
+	if setup.TestOnTPCEndPoint() {
+		var ts oauth2.TokenSource
+		// Set up the TPC endpoint and provide a token source for authentication.
+		ts, err = getTokenSrc("/tmp/sa.key.json")
+		if err != nil {
+			return nil, fmt.Errorf("unable to fetch token-source for TPC: %w", err)
+		}
+		client, err = storage.NewClient(ctx, option.WithEndpoint("storage.apis-tpczero.goog:443"), option.WithTokenSource(ts))
+	} else {
+		client, err = storage.NewClient(ctx)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("storage.NewClient: %w", err)
 	}
 	return client, nil
 }
 
+func getTokenSrc(path string) (tokenSrc oauth2.TokenSource, err error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("ReadFile(%q): %w", path, err)
+	}
+
+	// Create a config struct based on its contents.
+	ts, err := google.JWTAccessTokenSourceWithScope(contents, storagev1.DevstorageFullControlScope)
+	if err != nil {
+		return nil, fmt.Errorf("JWTConfigFromJSON: %w", err)
+	}
+	return ts, err
+}
+
 // ReadObjectFromGCS downloads the object from GCS and returns the data.
 func ReadObjectFromGCS(ctx context.Context, client *storage.Client, object string) (string, error) {
-	var bucket string
-	setBucketAndObjectBasedOnTypeOfMount(&bucket, &object)
+	bucket, object := setup.GetBucketAndObjectBasedOnTypeOfMount(object)
 
 	// Create storage reader to read from GCS.
 	rc, err := client.Bucket(bucket).Object(object).NewReader(ctx)
@@ -89,8 +89,7 @@ func ReadObjectFromGCS(ctx context.Context, client *storage.Client, object strin
 // ReadChunkFromGCS downloads the object chunk from GCS and returns the data.
 func ReadChunkFromGCS(ctx context.Context, client *storage.Client, object string,
 	offset, size int64) (string, error) {
-	var bucket string
-	setBucketAndObjectBasedOnTypeOfMount(&bucket, &object)
+	bucket, object := setup.GetBucketAndObjectBasedOnTypeOfMount(object)
 
 	// Create storage reader to read from GCS.
 	rc, err := client.Bucket(bucket).Object(object).NewRangeReader(ctx, offset, size)
@@ -108,8 +107,7 @@ func ReadChunkFromGCS(ctx context.Context, client *storage.Client, object string
 }
 
 func WriteToObject(ctx context.Context, client *storage.Client, object, content string, precondition storage.Conditions) error {
-	var bucket string
-	setBucketAndObjectBasedOnTypeOfMount(&bucket, &object)
+	bucket, object := setup.GetBucketAndObjectBasedOnTypeOfMount(object)
 
 	o := client.Bucket(bucket).Object(object)
 	if !reflect.DeepEqual(precondition, storage.Conditions{}) {
@@ -134,7 +132,7 @@ func CreateObjectOnGCS(ctx context.Context, client *storage.Client, object, cont
 }
 
 // CreateStorageClientWithTimeOut creates storage client with a configurable timeout and return a function to cancel the storage client
-func CreateStorageClientWithTimeOut(ctx *context.Context, storageClient **storage.Client, time time.Duration, t *testing.T) func() {
+func CreateStorageClientWithTimeOut(ctx *context.Context, storageClient **storage.Client, time time.Duration) func() error {
 	var err error
 	var cancel context.CancelFunc
 	*ctx, cancel = context.WithTimeout(*ctx, time)
@@ -143,25 +141,29 @@ func CreateStorageClientWithTimeOut(ctx *context.Context, storageClient **storag
 		log.Fatalf("client.CreateStorageClient: %v", err)
 	}
 	// Return func to close storage client and release resources.
-	return func() {
+	return func() error {
 		err := (*storageClient).Close()
 		if err != nil {
-			t.Log("Failed to close storage client")
+			return fmt.Errorf("Failed to close storage client: %v", err)
 		}
 		defer cancel()
+		return nil
 	}
 }
 
 // DownloadObjectFromGCS downloads an object to a local file.
 func DownloadObjectFromGCS(gcsFile string, destFileName string, t *testing.T) error {
-	var bucket string
-	setBucketAndObjectBasedOnTypeOfMount(&bucket, &gcsFile)
+	bucket, gcsFile := setup.GetBucketAndObjectBasedOnTypeOfMount(gcsFile)
 
 	ctx := context.Background()
 	var storageClient *storage.Client
-	closeStorageClient := CreateStorageClientWithTimeOut(&ctx, &storageClient, time.Minute*5, t)
-	defer closeStorageClient()
-
+	closeStorageClient := CreateStorageClientWithTimeOut(&ctx, &storageClient, time.Minute*5)
+	defer func() {
+		err := closeStorageClient()
+		if err != nil {
+			t.Errorf("closeStorageClient failed: %v", err)
+		}
+	}()
 	f := operations.CreateFile(destFileName, setup.FilePermission_0600, t)
 	defer operations.CloseFile(f)
 
@@ -179,8 +181,7 @@ func DownloadObjectFromGCS(gcsFile string, destFileName string, t *testing.T) er
 }
 
 func DeleteObjectOnGCS(ctx context.Context, client *storage.Client, objectName string) error {
-	var bucket, obj string
-	setBucketAndObjectBasedOnTypeOfMount(&bucket, &obj)
+	bucket, _ := setup.GetBucketAndObjectBasedOnTypeOfMount("")
 
 	// Get handle to the object
 	object := client.Bucket(bucket).Object(objectName)
@@ -194,8 +195,7 @@ func DeleteObjectOnGCS(ctx context.Context, client *storage.Client, objectName s
 }
 
 func DeleteAllObjectsWithPrefix(ctx context.Context, client *storage.Client, prefix string) error {
-	var bucket, object string
-	setBucketAndObjectBasedOnTypeOfMount(&bucket, &object)
+	bucket, _ := setup.GetBucketAndObjectBasedOnTypeOfMount("")
 
 	// Get an object iterator
 	query := &storage.Query{Prefix: prefix}
@@ -212,4 +212,14 @@ func DeleteAllObjectsWithPrefix(ctx context.Context, client *storage.Client, pre
 		}
 	}
 	return nil
+}
+
+func StatObject(ctx context.Context, client *storage.Client, object string) (*storage.ObjectAttrs, error) {
+	bucket, object := setup.GetBucketAndObjectBasedOnTypeOfMount(object)
+
+	attrs, err := client.Bucket(bucket).Object(object).Attrs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return attrs, nil
 }

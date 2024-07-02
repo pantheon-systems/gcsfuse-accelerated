@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/metadata"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/fake"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/metadata"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/fake"
 	"golang.org/x/net/context"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/gcsx"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/gcsx"
 	"github.com/jacobsa/fuse/fuseops"
 	. "github.com/jacobsa/ogletest"
 	"github.com/jacobsa/timeutil"
@@ -171,7 +171,7 @@ func (t *BaseDirTest) LookUpChild_BucketFound() {
 	ExpectTrue(result.FullName.IsBucketRoot())
 	ExpectEq("bucketA/", result.FullName.LocalName())
 	ExpectEq("", result.FullName.GcsObjectName())
-	ExpectEq(nil, result.Object)
+	ExpectEq(nil, result.MinObject)
 	ExpectEq(metadata.ImplicitDirType, result.Type())
 
 	result, err = t.in.LookUpChild(t.ctx, "bucketB")
@@ -183,7 +183,7 @@ func (t *BaseDirTest) LookUpChild_BucketFound() {
 	ExpectTrue(result.FullName.IsBucketRoot())
 	ExpectEq("bucketB/", result.FullName.LocalName())
 	ExpectEq("", result.FullName.GcsObjectName())
-	ExpectEq(nil, result.Object)
+	ExpectEq(nil, result.MinObject)
 	ExpectEq(metadata.ImplicitDirType, result.Type())
 }
 
@@ -198,4 +198,16 @@ func (t *BaseDirTest) LookUpChild_BucketCached() {
 	ExpectEq(2, t.bm.SetUpTimes())
 	_, _ = t.in.LookUpChild(t.ctx, "missing_bucket")
 	ExpectEq(3, t.bm.SetUpTimes())
+}
+
+func (t *BaseDirTest) Test_ShouldInvalidateKernelListCache() {
+	ttl := time.Second
+	AssertEq(true, t.in.ShouldInvalidateKernelListCache(ttl))
+}
+
+func (t *BaseDirTest) Test_ShouldInvalidateKernelListCache_TtlExpired() {
+	ttl := time.Second
+	t.clock.AdvanceTime(10 * time.Second)
+
+	AssertEq(true, t.in.ShouldInvalidateKernelListCache(ttl))
 }

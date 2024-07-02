@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/fake"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/storageutil"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/fake"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/storageutil"
 	"golang.org/x/net/context"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/gcsx"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/gcsx"
 	. "github.com/jacobsa/oglematchers"
 	. "github.com/jacobsa/ogletest"
 	"github.com/jacobsa/timeutil"
@@ -124,7 +124,7 @@ func (t *IntegrationTest) create(o *gcs.Object) {
 func (t *IntegrationTest) objectGeneration(name string) (gen int64) {
 	// Stat.
 	req := &gcs.StatObjectRequest{Name: name}
-	o, err := t.bucket.StatObject(t.ctx, req)
+	m, _, err := t.bucket.StatObject(t.ctx, req)
 
 	var notFoundErr *gcs.NotFoundError
 	if errors.As(err, &notFoundErr) {
@@ -136,7 +136,7 @@ func (t *IntegrationTest) objectGeneration(name string) (gen int64) {
 		panic(err)
 	}
 
-	gen = o.Generation
+	gen = m.Generation
 	return
 }
 

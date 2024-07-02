@@ -17,7 +17,7 @@ package util
 import (
 	"reflect"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
 	"google.golang.org/api/googleapi"
 	storagev1 "google.golang.org/api/storage/v1"
 )
@@ -233,42 +233,33 @@ func contentSizeOfArrayOfAclPointers(acls *[]*storagev1.ObjectAccessControl) (si
 	return
 }
 
-// NestedSizeOfGcsObject returns the full nested memory size
-// of the gcs.Object pointed by the passed pointer.
+// NestedSizeOfGcsMinObject returns the full nested memory size
+// of the gcs.MinObject pointed by the passed pointer.
 // Improvement scope: This can be generalized to a general-struct
 // but that needs better understanding of the reflect package
 // and other related packages.
-func NestedSizeOfGcsObject(o *gcs.Object) (size int) {
-	if o == nil {
+func NestedSizeOfGcsMinObject(m *gcs.MinObject) (size int) {
+	if m == nil {
 		return
 	}
 
 	// Get raw size of the structure.
-	size = UnsafeSizeOf(o)
+	size = UnsafeSizeOf(m)
 
 	// Account for string members.
-	for _, strPtr := range []*string{
-		&o.Name, &o.ContentType, &o.ContentLanguage, &o.CacheControl,
-		&o.Owner, &o.ContentEncoding, &o.MediaLink, &o.StorageClass,
-		&o.ContentDisposition, &o.CustomTime} {
+	for _, strPtr := range []*string{&m.Name, &m.ContentEncoding} {
 		size += contentSizeOfString(strPtr)
 	}
 
-	// Account for integer-pointer members.
-	size += UnsafeSizeOf(o.CRC32C)
-	// Account for pointer-to-integer-array members.
-	size += UnsafeSizeOf(o.MD5)
+	// Account for pointers to built in types.
+	size += UnsafeSizeOf(m.CRC32C)
 
-	// Account for integer members - Size, Generation, MetaGeneration, ComponentCount.
-	// Account for time members - Deleted, Updated.
-	// Account for boolean members - EventBasedHold.
+	// Account for integer members - Size, Generation, MetaGeneration.
+	// Account for time members - Updated.
 	// Nothing to be added for any built-in types - already accounted for in unsafeSizeOf(o).
 
 	// Account for map members.
-	size += contentSizeOfStringToStringMap(&o.Metadata)
-
-	// Account for slice members.
-	size += contentSizeOfArrayOfAclPointers(&o.Acl)
+	size += contentSizeOfStringToStringMap(&m.Metadata)
 
 	return
 }

@@ -20,9 +20,10 @@ import (
 	"io"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/logger"
-	"github.com/googlecloudplatform/gcsfuse/internal/monitor/tags"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/logger"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/monitor/tags"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
 	"go.opencensus.io/plugin/ochttp"
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
@@ -114,6 +115,10 @@ func (mb *monitoringBucket) Name() string {
 	return mb.wrapped.Name()
 }
 
+func (mb *monitoringBucket) BucketType() gcs.BucketType {
+	return mb.wrapped.BucketType()
+}
+
 func (mb *monitoringBucket) NewReader(
 	ctx context.Context,
 	req *gcs.ReadObjectRequest) (rc io.ReadCloser, err error) {
@@ -157,11 +162,11 @@ func (mb *monitoringBucket) ComposeObjects(
 
 func (mb *monitoringBucket) StatObject(
 	ctx context.Context,
-	req *gcs.StatObjectRequest) (*gcs.Object, error) {
+	req *gcs.StatObjectRequest) (*gcs.MinObject, *gcs.ExtendedObjectAttributes, error) {
 	startTime := time.Now()
-	o, err := mb.wrapped.StatObject(ctx, req)
+	m, e, err := mb.wrapped.StatObject(ctx, req)
 	recordRequest(ctx, "StatObject", startTime)
-	return o, err
+	return m, e, err
 }
 
 func (mb *monitoringBucket) ListObjects(
@@ -189,6 +194,20 @@ func (mb *monitoringBucket) DeleteObject(
 	err := mb.wrapped.DeleteObject(ctx, req)
 	recordRequest(ctx, "DeleteObject", startTime)
 	return err
+}
+
+func (mb *monitoringBucket) DeleteFolder(ctx context.Context, folderName string) error {
+	startTime := time.Now()
+	err := mb.wrapped.DeleteFolder(ctx, folderName)
+	recordRequest(ctx, "DeleteFolder", startTime)
+	return err
+}
+
+func (mb *monitoringBucket) GetFolder(ctx context.Context, folderName string) (*controlpb.Folder, error) {
+	startTime := time.Now()
+	folder, err := mb.wrapped.GetFolder(ctx, folderName)
+	recordRequest(ctx, "GetFolder", startTime)
+	return folder, err
 }
 
 // recordReader increments the reader count when it's opened or closed.

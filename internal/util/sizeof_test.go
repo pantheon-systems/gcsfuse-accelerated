@@ -15,58 +15,61 @@
 package util
 
 import (
-	"crypto/md5"
 	"net/http"
 	"testing"
 	"time"
 	"unsafe"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
-	. "github.com/jacobsa/ogletest"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
 	"google.golang.org/api/googleapi"
-	storagev1 "google.golang.org/api/storage/v1"
 )
-
-func TestSizeof(t *testing.T) { RunTests(t) }
 
 ////////////////////////////////////////////////////////////////////////
 // Boilerplate
 ////////////////////////////////////////////////////////////////////////
 
 type SizeofTest struct {
+	suite.Suite
 }
 
-func init() { RegisterTestSuite(&SizeofTest{}) }
+func TestSizeOfSuite(t *testing.T) {
+	suite.Run(t, new(SizeofTest))
+}
 
 var (
 	i            int
+	ui32         uint32
 	intArray     []int
 	b            byte
 	stringIntMap map[string]int
 
 	sizeOfInt               int
 	sizeOfIntPtr            int
+	sizeOfUInt32            int
+	sizeOfUInt32Ptr         int
 	sizeOfByte              int
 	sizeOfEmptyIntArray     int
 	sizeOfEmptyStringIntMap int
 	sizeOfEmptyStruct       int
-	sizeOfEmptyGcsObject    int
 	sizeOfEmptyMinObject    int
 )
 
-func init() {
+func (t *SizeofTest) SetupTest() {
 	type emptyStruct struct{}
 
 	sizeOfInt = int(unsafe.Sizeof(i))
 	sizeOfIntPtr = int(unsafe.Sizeof(&i))
+	sizeOfUInt32 = int(unsafe.Sizeof(ui32))
+	sizeOfUInt32Ptr = int(unsafe.Sizeof(&ui32))
 	sizeOfByte = int(unsafe.Sizeof(b))
 	sizeOfEmptyIntArray = int(unsafe.Sizeof(intArray))
 	sizeOfEmptyStringIntMap = int(unsafe.Sizeof(stringIntMap))
 
 	sizeOfEmptyStruct = int(unsafe.Sizeof(emptyStruct{}))
-	AssertEq(0, sizeOfEmptyStruct)
+	assert.Equal(t.T(), 0, sizeOfEmptyStruct)
 
-	sizeOfEmptyGcsObject = int(unsafe.Sizeof(gcs.Object{}))
 	sizeOfEmptyMinObject = int(unsafe.Sizeof(gcs.MinObject{}))
 }
 
@@ -86,6 +89,14 @@ func (t *SizeofTest) TestUnsafeSizeOf() {
 		{
 			t:             &i,
 			expected_size: sizeOfIntPtr,
+		},
+		{
+			t:             ui32,
+			expected_size: sizeOfUInt32,
+		},
+		{
+			t:             &ui32,
+			expected_size: sizeOfUInt32Ptr,
 		},
 		{
 			t: struct {
@@ -128,7 +139,7 @@ func (t *SizeofTest) TestUnsafeSizeOf() {
 		},
 	} {
 		calculatedSize := UnsafeSizeOf(&tc.t)
-		AssertEq(tc.expected_size, calculatedSize)
+		assert.Equal(t.T(), tc.expected_size, calculatedSize)
 	}
 }
 
@@ -151,7 +162,7 @@ func (t *SizeofTest) TestContentSizeOfString() {
 			expected_content_size: 11,
 		},
 	} {
-		AssertEq(tc.expected_content_size, contentSizeOfString(&tc.str))
+		assert.Equal(t.T(), tc.expected_content_size, contentSizeOfString(&tc.str))
 	}
 }
 
@@ -181,7 +192,7 @@ func (t *SizeofTest) TestContentSizeOfArrayOfStrings() {
 			expected_content_size: 2*emptyStringSize + 5 + 11,
 		},
 	} {
-		AssertEq(tc.expected_content_size, contentSizeOfArrayOfStrings(&tc.strs))
+		assert.Equal(t.T(), tc.expected_content_size, contentSizeOfArrayOfStrings(&tc.strs))
 	}
 }
 
@@ -211,7 +222,7 @@ func (t *SizeofTest) TestContentSizeOfStringToStringMap() {
 			expected_content_size: emptyStringSize + 1 + emptyStringSize + 2 + emptyStringSize + 3 + emptyStringSize + 5,
 		},
 	} {
-		AssertEq(tc.expected_content_size, contentSizeOfStringToStringMap(&tc.m))
+		assert.Equal(t.T(), tc.expected_content_size, contentSizeOfStringToStringMap(&tc.m))
 	}
 }
 
@@ -241,7 +252,7 @@ func (t *SizeofTest) TestContentSizeOfStringToStringArrayMap() {
 			expected_content_size: emptyStringSize + 1 + emptyStringArraySize + emptyStringSize + 2 + emptyStringSize + 2 + emptyStringSize + 3 + emptyStringArraySize + emptyStringSize + 5 + emptyStringSize + 4,
 		},
 	} {
-		AssertEq(tc.expected_content_size, contentSizeOfStringToStringArrayMap(&tc.m))
+		assert.Equal(t.T(), tc.expected_content_size, contentSizeOfStringToStringArrayMap(&tc.m))
 	}
 }
 
@@ -271,92 +282,38 @@ func (t *SizeofTest) TestContentSizeOfServerResponse() {
 			expected_content_size: emptyStringSize + 1 + emptyStringArraySize + emptyStringSize + 2 + emptyStringSize + 3 + emptyStringArraySize + emptyStringSize + 5,
 		},
 	} {
-		AssertEq(tc.expected_content_size, contentSizeOfServerResponse(&tc.sr))
+		assert.Equal(t.T(), tc.expected_content_size, contentSizeOfServerResponse(&tc.sr))
 	}
 }
 
-func (t *SizeofTest) TestNestedSizeOfGcsObject() {
+func (t *SizeofTest) TestNestedSizeOfGcsMinObject() {
 	const name string = "my-object"
-	const contentType string = "plain/bin/gzip"
-	const contentLanguage string = "en/fr/jp"
-	const cacheControl string = "off/on"
 	const contentEncoding string = "gzip/none"
-	const owner string = "my-user"
-	var md5Value [md5.Size]byte = [md5.Size]byte{0, 2, 42, 2, 4, 54, 3}
-	var crc32 uint32 = 758734925
-	var mediaLink string = "media-link"
 	var generation int64 = 858734898
 	var metaGeneration int64 = 858734899
-	const storageClass string = "standard"
-	deleted := time.Now()
+	var crc32 uint32 = 1234
 	updated := time.Now()
-	const componentCount int64 = 1
-	const contentDisposition string = "my-content-disposition"
-	const customTime string = "my-custom-time"
-	const eventBasedHold bool = true
 	customMetadaField1 := "google-symlink"
 	customMetadaValue1 := "true"
 	customMetadaField2 := "google-xyz-field"
 	customMetadaValue2 := "google-symlink"
 	customMetadataFields := map[string]string{customMetadaField1: customMetadaValue1, customMetadaField2: customMetadaValue2}
 	customMetadataFieldsContentSize := emptyStringSize + contentSizeOfString(&customMetadaField1) + emptyStringSize + contentSizeOfString(&customMetadaValue1) + emptyStringSize + contentSizeOfString(&customMetadaField2) + emptyStringSize + contentSizeOfString(&customMetadaValue2)
-	customAcls := []*storagev1.ObjectAccessControl{
-		{
-			Bucket:     "my-bucket",
-			Domain:     "my-domain",
-			Email:      "my-email@my-domain.com",
-			Entity:     "my-entity",
-			EntityId:   "my-entity-id",
-			Etag:       "my-etag",
-			Generation: generation,
-			Id:         "object-id",
-			Kind:       "object-kind",
-			Object:     "my-object",
-			ProjectTeam: &storagev1.ObjectAccessControlProjectTeam{
-				ProjectNumber: "78358753894",
-				Team:          "project-team",
-				ForceSendFields: []string{
-					"field1", "field2", "field3",
-				},
-			},
-			Role:            "my-role",
-			SelfLink:        "",
-			ServerResponse:  googleapi.ServerResponse{},
-			ForceSendFields: []string{},
-			NullFields:      []string{},
-		},
+
+	m := gcs.MinObject{
+		Name:            name,
+		Size:            100,
+		ContentEncoding: contentEncoding,
+		Metadata:        customMetadataFields,
+		Generation:      generation,
+		MetaGeneration:  metaGeneration,
+		Updated:         updated,
+		CRC32C:          &crc32,
 	}
 
-	o := gcs.Object{
-		Name:               name,
-		ContentType:        contentType,
-		ContentLanguage:    contentLanguage,
-		CacheControl:       cacheControl,
-		Owner:              owner,
-		Size:               100,
-		ContentEncoding:    contentEncoding,
-		MD5:                &md5Value,
-		CRC32C:             &crc32,
-		MediaLink:          mediaLink,
-		Metadata:           customMetadataFields,
-		Generation:         generation,
-		MetaGeneration:     metaGeneration,
-		StorageClass:       storageClass,
-		Deleted:            deleted,
-		Updated:            updated,
-		ComponentCount:     componentCount,
-		ContentDisposition: contentDisposition,
-		CustomTime:         customTime,
-		EventBasedHold:     eventBasedHold,
-		Acl:                customAcls,
-	}
-
-	var expectedSize int = sizeOfEmptyGcsObject
-	expectedSize += len(contentType) + len(name) + len(contentLanguage) + len(cacheControl) + len(contentEncoding) + len(owner) + len(mediaLink) + len(storageClass) + len(contentDisposition) + len(customTime)
-	expectedSize += md5.Size // for MD5 [md5.Size]byte
-	expectedSize += 4        // for CRC 32 uint32
+	var expectedSize int = sizeOfEmptyMinObject
+	expectedSize += len(name) + len(contentEncoding) + sizeOfUInt32
 	expectedSize += customMetadataFieldsContentSize
-	expectedSize += contentSizeOfArrayOfAclPointers(&customAcls)
 
-	AssertEq(expectedSize, NestedSizeOfGcsObject(&o))
+	assert.Equal(t.T(), expectedSize, NestedSizeOfGcsMinObject(&m))
 }

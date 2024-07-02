@@ -27,20 +27,59 @@ import (
 	"net/http"
 
 	"cloud.google.com/go/storage"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/storageutil"
+	control "cloud.google.com/go/storage/control/apiv2"
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
+	"github.com/googleapis/gax-go/v2"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/logger"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/storageutil"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 )
 
 type bucketHandle struct {
 	gcs.Bucket
-	bucket     *storage.BucketHandle
-	bucketName string
+	bucket        *storage.BucketHandle
+	bucketName    string
+	bucketType    gcs.BucketType
+	controlClient StorageControlClient
 }
 
 func (bh *bucketHandle) Name() string {
 	return bh.bucketName
+}
+
+func (bh *bucketHandle) BucketType() gcs.BucketType {
+	var nilControlClient *control.StorageControlClient = nil
+	// Note: The first invocation of this method will be slower due to a required Google Cloud Storage (GCS) fetch.
+	// Subsequent calls will be significantly faster as the results are cached in memory.
+	// While this operation is thread-safe, parallel calls during the initial fetch can result in redundant GCS requests.
+	// To avoid this, it's advisable to call this initially while mounting.
+	if bh.bucketType == gcs.Nil {
+		if bh.controlClient == nilControlClient {
+			bh.bucketType = gcs.NonHierarchical
+			return bh.bucketType
+		}
+
+		storageLayout, err := bh.getStorageLayout()
+
+		// In case bucket does not exist, set type unknown instead of panic.
+		if err != nil {
+			bh.bucketType = gcs.Unknown
+			logger.Errorf("Error returned from GetStorageLayout: %v", err)
+			return bh.bucketType
+		}
+
+		hierarchicalNamespace := storageLayout.GetHierarchicalNamespace()
+		if hierarchicalNamespace != nil && hierarchicalNamespace.Enabled {
+			bh.bucketType = gcs.Hierarchical
+			return bh.bucketType
+		}
+
+		bh.bucketType = gcs.NonHierarchical
+	}
+
+	return bh.bucketType
 }
 
 func (bh *bucketHandle) NewReader(
@@ -106,7 +145,8 @@ func (b *bucketHandle) DeleteObject(ctx context.Context, req *gcs.DeleteObjectRe
 
 }
 
-func (b *bucketHandle) StatObject(ctx context.Context, req *gcs.StatObjectRequest) (o *gcs.Object, err error) {
+func (b *bucketHandle) StatObject(ctx context.Context,
+	req *gcs.StatObjectRequest) (m *gcs.MinObject, e *gcs.ExtendedObjectAttributes, err error) {
 	var attrs *storage.ObjectAttrs
 	// Retrieving object attrs through Go Storage Client.
 	attrs, err = b.bucket.Object(req.Name).Attrs(ctx)
@@ -122,7 +162,11 @@ func (b *bucketHandle) StatObject(ctx context.Context, req *gcs.StatObjectReques
 	}
 
 	// Converting attrs to type *Object
-	o = storageutil.ObjectAttrsToBucketObject(attrs)
+	o := storageutil.ObjectAttrsToBucketObject(attrs)
+	m = storageutil.ConvertObjToMinObject(o)
+	if req.ReturnExtendedObjectAttributes {
+		e = storageutil.ConvertObjToExtendedObjectAttributes(o)
+	}
 
 	return
 }
@@ -160,6 +204,9 @@ func (bh *bucketHandle) CreateObject(ctx context.Context, req *gcs.CreateObjectR
 	// Chuck size for resumable upload is default i.e. 16MB.
 	wc := obj.NewWriter(ctx)
 	wc = storageutil.SetAttrsInWriter(wc, req)
+	wc.ProgressFunc = func(bytesUploadedSoFar int64) {
+		logger.Tracef("gcs: Req %#16x: -- CreateObject(%q): %20v bytes uploaded so far", ctx.Value(gcs.ReqIdField), req.Name, bytesUploadedSoFar)
+	}
 
 	// Copy the contents to the writer.
 	if _, err = io.Copy(wc, req.Contents); err != nil {
@@ -418,6 +465,43 @@ func (b *bucketHandle) ComposeObjects(ctx context.Context, req *gcs.ComposeObjec
 	o = storageutil.ObjectAttrsToBucketObject(attrs)
 
 	return
+}
+
+func (b *bucketHandle) DeleteFolder(ctx context.Context, folderName string) (err error) {
+	var callOptions []gax.CallOption
+
+	err = b.controlClient.DeleteFolder(ctx, &controlpb.DeleteFolderRequest{
+		Name: "projects/_/buckets/" + b.bucketName + "/folders/" + folderName,
+	}, callOptions...)
+
+	return err
+}
+
+// TODO: Consider adding this method to the bucket interface if additional
+// layout options are needed in the future.
+func (b *bucketHandle) getStorageLayout() (*controlpb.StorageLayout, error) {
+	var callOptions []gax.CallOption
+	stoargeLayout, err := b.controlClient.GetStorageLayout(context.Background(), &controlpb.GetStorageLayoutRequest{
+		Name:      "projects/_/buckets/" + b.bucketName + "/storageLayout",
+		Prefix:    "",
+		RequestId: "",
+	}, callOptions...)
+
+	return stoargeLayout, err
+}
+
+func (b *bucketHandle) GetFolder(ctx context.Context, folderName string) (*controlpb.Folder, error) {
+	var callOptions []gax.CallOption
+
+	folder, err := b.controlClient.GetFolder(ctx, &controlpb.GetFolderRequest{
+		Name: "projects/_/buckets/" + b.bucketName + "/folders/" + folderName,
+	}, callOptions...)
+
+	if err != nil {
+		err = fmt.Errorf("error getting metadata for folder: %s, %w", folderName, err)
+	}
+
+	return folder, err
 }
 
 func isStorageConditionsNotEmpty(conditions storage.Conditions) bool {

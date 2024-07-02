@@ -20,7 +20,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
 	"golang.org/x/net/context"
 )
 
@@ -61,6 +62,10 @@ func (b *prefixBucket) localName(n string) string {
 
 func (b *prefixBucket) Name() string {
 	return b.wrapped.Name()
+}
+
+func (b *prefixBucket) BucketType() gcs.BucketType {
+	return b.wrapped.BucketType()
 }
 
 func (b *prefixBucket) NewReader(
@@ -138,17 +143,17 @@ func (b *prefixBucket) ComposeObjects(
 
 func (b *prefixBucket) StatObject(
 	ctx context.Context,
-	req *gcs.StatObjectRequest) (o *gcs.Object, err error) {
+	req *gcs.StatObjectRequest) (m *gcs.MinObject, e *gcs.ExtendedObjectAttributes, err error) {
 	// Modify the request and call through.
 	mReq := new(gcs.StatObjectRequest)
 	*mReq = *req
 	mReq.Name = b.wrappedName(req.Name)
 
-	o, err = b.wrapped.StatObject(ctx, mReq)
+	m, e, err = b.wrapped.StatObject(ctx, mReq)
 
 	// Modify the returned object.
-	if o != nil {
-		o.Name = b.localName(o.Name)
+	if m != nil {
+		m.Name = b.localName(m.Name)
 	}
 
 	return
@@ -206,4 +211,14 @@ func (b *prefixBucket) DeleteObject(
 
 	err = b.wrapped.DeleteObject(ctx, mReq)
 	return
+}
+
+func (b *prefixBucket) DeleteFolder(ctx context.Context, folderName string) (err error) {
+	mFolderName := b.wrappedName(folderName)
+	return b.wrapped.DeleteFolder(ctx, mFolderName)
+}
+
+func (b *prefixBucket) GetFolder(ctx context.Context, folderName string) (folder *controlpb.Folder, err error) {
+	mFolderName := b.wrappedName(folderName)
+	return b.wrapped.GetFolder(ctx, mFolderName)
 }

@@ -18,18 +18,17 @@ import (
 	"net/url"
 	"time"
 
-	mountpkg "github.com/googlecloudplatform/gcsfuse/internal/mount"
+	"github.com/googlecloudplatform/gcsfuse/v2/cfg"
 )
 
 const CustomEndpoint = "https://localhost:9000"
 const DummyKeyFile = "test/test_creds.json"
 const CustomTokenUrl = "http://custom-token-url"
 
-// GetDefaultStorageClientConfig is only for test, making the default endpoint
-// non-nil, so that we can create dummy tokenSource while unit test.
+// GetDefaultStorageClientConfig is only for test.
 func GetDefaultStorageClientConfig() (clientConfig StorageClientConfig) {
 	return StorageClientConfig{
-		ClientProtocol:             mountpkg.HTTP1,
+		ClientProtocol:             cfg.HTTP1,
 		MaxConnsPerHost:            10,
 		MaxIdleConnsPerHost:        100,
 		HttpClientTimeout:          800 * time.Millisecond,
@@ -41,5 +40,7 @@ func GetDefaultStorageClientConfig() (clientConfig StorageClientConfig) {
 		TokenUrl:                   "",
 		ReuseTokenFromUrl:          true,
 		ExperimentalEnableJsonRead: false,
+		AnonymousAccess:            true,
+		EnableHNS:                  false,
 	}
 }

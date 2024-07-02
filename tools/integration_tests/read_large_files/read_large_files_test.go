@@ -22,10 +22,10 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/config"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/static_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/static_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 const OneMB = 1024 * 1024
@@ -35,6 +35,7 @@ const ChunkSize = 200 * OneMB
 const NumberOfRandomReadCalls = 200
 const MinReadableByteFromFile = 0
 const MaxReadableByteFromFile = 500 * OneMB
+const DirForReadLargeFilesTests = "dirForReadLargeFilesTests"
 
 func createMountConfigsAndEquivalentFlags() (flags [][]string) {
 	cacheDirPath := path.Join(os.Getenv("HOME"), "cache-dri")
@@ -47,7 +48,7 @@ func createMountConfigsAndEquivalentFlags() (flags [][]string) {
 			MaxSizeMB:             700,
 			CacheFileForRangeRead: true,
 		},
-		CacheDir: config.CacheDir(cacheDirPath),
+		CacheDir: cacheDirPath,
 		LogConfig: config.LogConfig{
 			Severity:        config.TRACE,
 			LogRotateConfig: config.DefaultLogRotateConfig(),
@@ -62,7 +63,7 @@ func createMountConfigsAndEquivalentFlags() (flags [][]string) {
 			MaxSizeMB:             -1,
 			CacheFileForRangeRead: false,
 		},
-		CacheDir: config.CacheDir(cacheDirPath),
+		CacheDir: cacheDirPath,
 		LogConfig: config.LogConfig{
 			Severity:        config.TRACE,
 			LogRotateConfig: config.DefaultLogRotateConfig(),
@@ -95,9 +96,6 @@ func TestMain(m *testing.M) {
 	setup.SetUpTestDirForTestBucketFlag()
 
 	successCode := static_mounting.RunTests(flags, m)
-
-	setup.RemoveBinFileCopiedForTesting()
-
 	os.Exit(successCode)
 }
 

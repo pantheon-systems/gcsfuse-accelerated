@@ -21,8 +21,8 @@ import (
 	"path"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -51,8 +51,7 @@ func readFile(fileInLocalDisk string, fileInMntDir string) error {
 }
 
 func TestReadFilesConcurrently(t *testing.T) {
-	// Clean the mountedDirectory before running test.
-	setup.CleanMntDir()
+	testDir := setup.SetupTestDirectory(DirForReadLargeFilesTests)
 
 	filesInLocalDisk := [NumberOfFilesInLocalDiskForConcurrentRead]string{FileOne, FileTwo, FileThree}
 	var filesPathInLocalDisk []string
@@ -62,7 +61,7 @@ func TestReadFilesConcurrently(t *testing.T) {
 		fileInLocalDisk := path.Join(os.Getenv("HOME"), filesInLocalDisk[i])
 		filesPathInLocalDisk = append(filesPathInLocalDisk, fileInLocalDisk)
 
-		file := path.Join(setup.MntDir(), filesInLocalDisk[i])
+		file := path.Join(testDir, filesInLocalDisk[i])
 		filesPathInMntDir = append(filesPathInMntDir, file)
 
 		createFileOnDiskAndCopyToMntDir(fileInLocalDisk, file, FiveHundredMB, t)

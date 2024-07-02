@@ -4,7 +4,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http:#www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -593,21 +593,22 @@ class ListingBenchmarkTest(unittest.TestCase):
 
   @patch('listing_benchmark.subprocess.call', return_value=0)
   def test_mount_gcs_bucket(self, mock_subprocess_call):
-    directory_name = listing_benchmark._mount_gcs_bucket('fake_bucket', '--implicit-dirs --max-conns-per-host 100')
+    directory_name = listing_benchmark._mount_gcs_bucket('fake_bucket',
+                                                         '--implicit-dirs')
     self.assertEqual(directory_name, 'fake_bucket')
     self.assertEqual(mock_subprocess_call.call_count, 2)
     self.assertEqual(mock_subprocess_call.call_args_list, [
         call('mkdir fake_bucket', shell=True),
-        call('gcsfuse --implicit-dirs --max-conns-per-host 100 fake_bucket fake_bucket', shell=True)
+        call('gcsfuse --implicit-dirs fake_bucket fake_bucket', shell=True)
     ])
 
   @patch('listing_benchmark.subprocess.call', return_value=1)
   def test_mount_gcs_bucket_error(self, mock_subprocess_call):
-    listing_benchmark._mount_gcs_bucket('fake_bucket', '--implicit-dirs --max-conns-per-host 100')
+    listing_benchmark._mount_gcs_bucket('fake_bucket', '--implicit-dirs')
     self.assertEqual(mock_subprocess_call.call_count, 3)
     self.assertEqual(mock_subprocess_call.call_args_list, [
         call('mkdir fake_bucket', shell=True),
-        call('gcsfuse --implicit-dirs --max-conns-per-host 100 fake_bucket fake_bucket', shell=True),
+        call('gcsfuse --implicit-dirs fake_bucket fake_bucket', shell=True),
         call('bash', shell=True)
     ])
 

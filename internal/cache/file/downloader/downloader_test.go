@@ -15,22 +15,23 @@
 package downloader
 
 import (
+	"context"
 	"os"
 	"path"
 	"sync"
 	"testing"
+	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/locker"
-
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/data"
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/lru"
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/util"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
-	testutil "github.com/googlecloudplatform/gcsfuse/internal/util"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/data"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/lru"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/util"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/locker"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	testutil "github.com/googlecloudplatform/gcsfuse/v2/internal/util"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
 	. "github.com/jacobsa/ogletest"
-	"golang.org/x/net/context"
 )
 
 var cacheDir = path.Join(os.Getenv("HOME"), "cache/dir")
@@ -38,18 +39,19 @@ var cacheDir = path.Join(os.Getenv("HOME"), "cache/dir")
 func TestDownloader(t *testing.T) { RunTests(t) }
 
 type downloaderTest struct {
-	job         *Job
-	bucket      gcs.Bucket
-	object      gcs.MinObject
-	cache       *lru.Cache
-	fakeStorage storage.FakeStorage
-	fileSpec    data.FileSpec
-	jm          *JobManager
+	defaultFileCacheConfig *config.FileCacheConfig
+	job                    *Job
+	bucket                 gcs.Bucket
+	object                 gcs.MinObject
+	cache                  *lru.Cache
+	fakeStorage            storage.FakeStorage
+	fileSpec               data.FileSpec
+	jm                     *JobManager
 }
 
 func init() { RegisterTestSuite(&downloaderTest{}) }
 
-func (dt *downloaderTest) SetUp(*TestInfo) {
+func (dt *downloaderTest) setupHelper() {
 	locker.EnableInvariantsCheck()
 	operations.RemoveDir(cacheDir)
 
@@ -59,13 +61,31 @@ func (dt *downloaderTest) SetUp(*TestInfo) {
 	dt.bucket = storageHandle.BucketHandle(storage.TestBucketName, "")
 
 	dt.initJobTest(DefaultObjectName, []byte("taco"), DefaultSequentialReadSizeMb, CacheMaxSize, func() {})
-	dt.jm = NewJobManager(dt.cache, util.DefaultFilePerm, util.DefaultDirPerm, cacheDir, DefaultSequentialReadSizeMb)
+	dt.jm = NewJobManager(dt.cache, util.DefaultFilePerm, util.DefaultDirPerm, cacheDir, DefaultSequentialReadSizeMb, dt.defaultFileCacheConfig)
+}
 
+func (dt *downloaderTest) SetUp(*TestInfo) {
+	dt.defaultFileCacheConfig = &config.FileCacheConfig{EnableCRC: true}
+	dt.setupHelper()
 }
 
 func (dt *downloaderTest) TearDown() {
 	dt.fakeStorage.ShutDown()
 	operations.RemoveDir(cacheDir)
+}
+
+func (dt *downloaderTest) waitForCrcCheckToBeCompleted() {
+	// Last notification is sent after the entire file is downloaded and before the CRC check is done.
+	// Hence, explicitly waiting till the CRC check is done.
+	for {
+		dt.job.mu.Lock()
+		if dt.job.status.Name == Completed || dt.job.status.Name == Failed || dt.job.status.Name == Invalid {
+			dt.job.mu.Unlock()
+			break
+		}
+		dt.job.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (dt *downloaderTest) verifyJob(job *Job, object *gcs.MinObject, bucket gcs.Bucket, sequentialReadSizeMb int32) {

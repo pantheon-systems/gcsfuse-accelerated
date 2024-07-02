@@ -21,15 +21,15 @@ import (
 	"path"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/lru"
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/metadata"
-	"github.com/googlecloudplatform/gcsfuse/internal/canned"
-	"github.com/googlecloudplatform/gcsfuse/internal/monitor"
-	"github.com/googlecloudplatform/gcsfuse/internal/ratelimit"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/caching"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
-	"github.com/googlecloudplatform/gcsfuse/internal/util"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/lru"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/metadata"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/canned"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/monitor"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/ratelimit"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/caching"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/util"
 	"github.com/jacobsa/timeutil"
 )
 
@@ -221,6 +221,9 @@ func (bm *bucketManager) SetUpBucket(
 		bm.config.AppendThreshold,
 		bm.config.TmpObjectPrefix,
 		b)
+
+	// Fetch bucket type from storage layout api and set bucket type.
+	b.BucketType()
 
 	// Check whether this bucket works, giving the user a warning early if there
 	// is some problem.

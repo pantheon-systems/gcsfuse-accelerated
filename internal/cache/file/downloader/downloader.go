@@ -15,13 +15,16 @@
 package downloader
 
 import (
+	"math"
 	"os"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/data"
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/lru"
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/util"
-	"github.com/googlecloudplatform/gcsfuse/internal/locker"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/data"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/lru"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/util"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/locker"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	"golang.org/x/sync/semaphore"
 )
 
 // JobManager is responsible for maintaining, getting and removing file download
@@ -44,6 +47,7 @@ type JobManager struct {
 	// file in cache.
 	sequentialReadSizeMb int32
 	fileInfoCache        *lru.Cache
+	fileCacheConfig      *config.FileCacheConfig
 
 	/////////////////////////
 	// Mutable state
@@ -53,13 +57,27 @@ type JobManager struct {
 	// concatenation of bucket name, "/", and object name. e.g. object path for an
 	// object named "a/b/foo.txt" in bucket named "test_bucket" would be
 	// "test_bucket/a/b/foo.txt"
-	jobs map[string]*Job
-	mu   locker.Locker
+	jobs              map[string]*Job
+	mu                locker.Locker
+	maxParallelismSem *semaphore.Weighted
 }
 
-func NewJobManager(fileInfoCache *lru.Cache, filePerm os.FileMode, dirPerm os.FileMode, cacheDir string, sequentialReadSizeMb int32) (jm *JobManager) {
-	jm = &JobManager{fileInfoCache: fileInfoCache, filePerm: filePerm,
-		dirPerm: dirPerm, cacheDir: cacheDir, sequentialReadSizeMb: sequentialReadSizeMb}
+func NewJobManager(fileInfoCache *lru.Cache, filePerm os.FileMode, dirPerm os.FileMode,
+	cacheDir string, sequentialReadSizeMb int32, c *config.FileCacheConfig) (jm *JobManager) {
+	maxParallelDownloads := int64(math.MaxInt64)
+	if c.MaxParallelDownloads > 0 {
+		maxParallelDownloads = int64(c.MaxParallelDownloads)
+	}
+	jm = &JobManager{
+		fileInfoCache:        fileInfoCache,
+		filePerm:             filePerm,
+		dirPerm:              dirPerm,
+		cacheDir:             cacheDir,
+		sequentialReadSizeMb: sequentialReadSizeMb,
+		fileCacheConfig:      c,
+		// Shared between jobs - Limits the overall concurrency of downloads.
+		maxParallelismSem: semaphore.NewWeighted(maxParallelDownloads),
+	}
 	jm.mu = locker.New("JobManager", func() {})
 	jm.jobs = make(map[string]*Job)
 	return
@@ -96,7 +114,7 @@ func (jm *JobManager) CreateJobIfNotExists(object *gcs.MinObject, bucket gcs.Buc
 	removeJobCallback := func() {
 		jm.removeJob(object.Name, bucket.Name())
 	}
-	job = NewJob(object, bucket, jm.fileInfoCache, jm.sequentialReadSizeMb, fileSpec, removeJobCallback)
+	job = NewJob(object, bucket, jm.fileInfoCache, jm.sequentialReadSizeMb, fileSpec, removeJobCallback, jm.fileCacheConfig, jm.maxParallelismSem)
 	jm.jobs[objectPath] = job
 	return job
 }

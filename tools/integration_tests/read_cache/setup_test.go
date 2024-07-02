@@ -19,27 +19,28 @@ import (
 	"log"
 	"os"
 	"path"
-	"strings"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/util"
-	"github.com/googlecloudplatform/gcsfuse/internal/config"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/client"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/dynamic_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/only_dir_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/static_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/util"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/client"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/dynamic_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/only_dir_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/static_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 const (
 	testDirName                         = "ReadCacheTest"
-	onlyDirMounted                      = "Test"
+	onlyDirMounted                      = "OnlyDirMountReadCache"
 	cacheSubDirectoryName               = "gcsfuse-file-cache"
 	smallContentSize                    = 128 * util.KiB
 	chunkSizeToRead                     = 128 * util.KiB
 	fileSize                            = 3 * util.MiB
-	fileSizeForRangeRead                = cacheCapacityForRangeReadTestInMiB * util.MiB
+	fileSizeSameAsCacheCapacity         = cacheCapacityForRangeReadTestInMiB * util.MiB
+	fileSizeForRangeRead                = 8 * util.MiB
 	chunksRead                          = fileSize / chunkSizeToRead
 	testFileName                        = "foo"
 	cacheCapacityInMB                   = 9
@@ -54,12 +55,11 @@ const (
 	zeroOffset                          = 0
 	randomReadOffset                    = 9 * util.MiB
 	configFileName                      = "config"
-	offsetForFirstRangeRead             = 5000
-	offsetForSecondRangeRead            = 1000
+	offset5000                          = 5000
+	offset1000                          = 1000
 	offsetForRangeReadWithin8MB         = 4 * util.MiB
 	offset10MiB                         = 10 * util.MiB
 	cacheCapacityForRangeReadTestInMiB  = 50
-	randomReadChunkCount                = fileSizeForRangeRead / chunkSizeToRead
 	cacheCapacityForVeryLargeFileInMiB  = 500
 	veryLargeFileSize                   = cacheCapacityForVeryLargeFileInMiB * util.MiB
 	offsetEndOfFile                     = veryLargeFileSize - 1*util.MiB
@@ -74,7 +74,9 @@ var (
 	// mount directory is where our tests run.
 	mountDir string
 	// root directory is the directory to be unmounted.
-	rootDir string
+	rootDir       string
+	storageClient *storage.Client
+	ctx           context.Context
 )
 
 ////////////////////////////////////////////////////////////////////////
@@ -90,7 +92,7 @@ func setupForMountedDirectoryTests() {
 }
 
 func mountGCSFuseAndSetupTestDir(flags []string, ctx context.Context, storageClient *storage.Client, testDirName string) {
-	mountGCSFuse(flags)
+	setup.MountGCSFuseWithGivenMountFunc(flags, mountFunc)
 	setup.SetMntDir(mountDir)
 	testDirPath = client.SetupTestDirectory(ctx, storageClient, testDirName)
 }
@@ -106,7 +108,7 @@ func createConfigFile(cacheSize int64, cacheFileForRangeRead bool, fileName stri
 			MaxSizeMB:             cacheSize,
 			CacheFileForRangeRead: cacheFileForRangeRead,
 		},
-		CacheDir: config.CacheDir(cacheDirPath),
+		CacheDir: cacheDirPath,
 		LogConfig: config.LogConfig{
 			Severity:        config.TRACE,
 			Format:          "json",
@@ -118,26 +120,21 @@ func createConfigFile(cacheSize int64, cacheFileForRangeRead bool, fileName stri
 	return filePath
 }
 
-func appendFlags(flagSet *[][]string, newFlags ...string) {
-	var resultFlagSet [][]string
-	for _, flag := range *flagSet {
-		for _, newFlag := range newFlags {
-			f := flag
-			if strings.Compare(newFlag, "") != 0 {
-				f = append(flag, newFlag)
-			}
-			resultFlagSet = append(resultFlagSet, f)
-		}
-	}
-	*flagSet = resultFlagSet
-}
-
 ////////////////////////////////////////////////////////////////////////
 // TestMain
 ////////////////////////////////////////////////////////////////////////
 
 func TestMain(m *testing.M) {
 	setup.ParseSetUpFlags()
+
+	ctx = context.Background()
+	closeStorageClient := client.CreateStorageClientWithTimeOut(&ctx, &storageClient, time.Minute*15)
+	defer func() {
+		err := closeStorageClient()
+		if err != nil {
+			log.Fatalf("closeStorageClient failed: %v", err)
+		}
+	}()
 
 	setup.ExitWithFailureIfBothTestBucketAndMountedDirectoryFlagsAreNotSet()
 
@@ -168,11 +165,10 @@ func TestMain(m *testing.M) {
 		mountDir = rootDir
 		mountFunc = only_dir_mounting.MountGcsfuseWithOnlyDir
 		successCode = m.Run()
-		setup.CleanupDirectoryOnGCS(path.Join(setup.TestBucket(), setup.OnlyDirMounted(), testDirName))
+		setup.CleanupDirectoryOnGCS(ctx, storageClient, path.Join(setup.TestBucket(), setup.OnlyDirMounted(), testDirName))
 	}
 
 	// Clean up test directory created.
-	setup.CleanupDirectoryOnGCS(path.Join(setup.TestBucket(), testDirName))
-	setup.RemoveBinFileCopiedForTesting()
+	setup.CleanupDirectoryOnGCS(ctx, storageClient, path.Join(setup.TestBucket(), testDirName))
 	os.Exit(successCode)
 }

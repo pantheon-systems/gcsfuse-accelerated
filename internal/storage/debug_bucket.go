@@ -20,8 +20,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/logger"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/logger"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
 	"golang.org/x/net/context"
 )
 
@@ -125,6 +126,10 @@ func (b *debugBucket) Name() string {
 	return b.wrapped.Name()
 }
 
+func (b *debugBucket) BucketType() gcs.BucketType {
+	return b.wrapped.BucketType()
+}
+
 func (b *debugBucket) NewReader(
 	ctx context.Context,
 	req *gcs.ReadObjectRequest) (rc io.ReadCloser, err error) {
@@ -155,7 +160,7 @@ func (b *debugBucket) CreateObject(
 	id, desc, start := b.startRequest("CreateObject(%q)", req.Name)
 	defer b.finishRequest(id, desc, start, &err)
 
-	o, err = b.wrapped.CreateObject(ctx, req)
+	o, err = b.wrapped.CreateObject(context.WithValue(ctx, gcs.ReqIdField, id), req)
 	return
 }
 
@@ -188,11 +193,11 @@ func (b *debugBucket) ComposeObjects(
 
 func (b *debugBucket) StatObject(
 	ctx context.Context,
-	req *gcs.StatObjectRequest) (o *gcs.Object, err error) {
+	req *gcs.StatObjectRequest) (m *gcs.MinObject, e *gcs.ExtendedObjectAttributes, err error) {
 	id, desc, start := b.startRequest("StatObject(%q)", req.Name)
 	defer b.finishRequest(id, desc, start, &err)
 
-	o, err = b.wrapped.StatObject(ctx, req)
+	m, e, err = b.wrapped.StatObject(ctx, req)
 	return
 }
 
@@ -223,5 +228,21 @@ func (b *debugBucket) DeleteObject(
 	defer b.finishRequest(id, desc, start, &err)
 
 	err = b.wrapped.DeleteObject(ctx, req)
+	return
+}
+
+func (b *debugBucket) DeleteFolder(ctx context.Context, folderName string) (err error) {
+	id, desc, start := b.startRequest("DeleteFolder(%q)", folderName)
+	defer b.finishRequest(id, desc, start, &err)
+
+	err = b.wrapped.DeleteFolder(ctx, folderName)
+	return err
+}
+
+func (b *debugBucket) GetFolder(ctx context.Context, folderName string) (folder *controlpb.Folder, err error) {
+	id, desc, start := b.startRequest("GetFolder(%q)", folderName)
+	defer b.finishRequest(id, desc, start, &err)
+
+	folder, err = b.wrapped.GetFolder(ctx, folderName)
 	return
 }

@@ -16,7 +16,6 @@ package config
 
 import (
 	"math"
-	"time"
 )
 
 const (
@@ -32,10 +31,7 @@ const (
 	// to be improbable for a user to explicitly set.
 	TtlInSecsUnsetSentinel int64 = math.MinInt64
 
-	// The maximum multiple of seconds representable by time.Duration.
-	MaxSupportedTtlInSeconds int64 = int64(math.MaxInt64 / int64(time.Second))
-
-	// DefaultTypeCacheMaxSizeMB is the default vlaue of type-cache max-size for every directory in MiBs.
+	// DefaultTypeCacheMaxSizeMB is the default value of type-cache max-size for every directory in MiBs.
 	// The value is set at the size needed for about 21k type-cache entries,
 	// each of which is about 200 bytes in size.
 	DefaultTypeCacheMaxSizeMB int = 4
@@ -45,8 +41,28 @@ const (
 	// when it is not set in the gcsfuse mount config file.
 	StatCacheMaxSizeMBUnsetSentinel int64 = math.MinInt64
 
-	DefaultFileCacheMaxSizeMB         int64 = -1
-	DefaultEnableManagedFolderListing       = true
+	DefaultFileCacheMaxSizeMB               int64 = -1
+	DefaultEnableEmptyManagedFoldersListing       = false
+	DefaultGrpcConnPoolSize                       = 1
+	DefaultAnonymousAccess                        = false
+	DefaultEnableHNS                              = false
+	DefaultIgnoreInterrupts                       = true
+
+	// ExperimentalMetadataPrefetchOnMountDisabled is the mode without metadata-prefetch.
+	ExperimentalMetadataPrefetchOnMountDisabled string = "disabled"
+	// ExperimentalMetadataPrefetchOnMountSynchronous is the prefetch-mode where mounting is not marked complete until prefetch is complete.
+	ExperimentalMetadataPrefetchOnMountSynchronous string = "sync"
+	// ExperimentalMetadataPrefetchOnMountAsynchronous is the prefetch-mode where mounting is marked complete once prefetch has started.
+	ExperimentalMetadataPrefetchOnMountAsynchronous string = "async"
+	// DefaultExperimentalMetadataPrefetchOnMount is default value of metadata-prefetch i.e. if not set by user; current it is ExperimentalMetadataPrefetchOnMountDisabled.
+	DefaultExperimentalMetadataPrefetchOnMount = ExperimentalMetadataPrefetchOnMountDisabled
+
+	DefaultKernelListCacheTtlSeconds int64 = 0
+
+	DefaultEnableCRC                = false
+	DefaultEnableParallelDownloads  = false
+	DefaultDownloadChunkSizeMB      = 50
+	DefaultParallelDownloadsPerFile = 16
 )
 
 type WriteConfig struct {
@@ -54,7 +70,7 @@ type WriteConfig struct {
 }
 
 type LogConfig struct {
-	Severity        LogSeverity     `yaml:"severity"`
+	Severity        string          `yaml:"severity"`
 	Format          string          `yaml:"format"`
 	FilePath        string          `yaml:"file-path"`
 	LogRotateConfig LogRotateConfig `yaml:"log-rotate"`
@@ -65,17 +81,40 @@ type ListConfig struct {
 	// There are two corner cases (a) empty managed folder (b) nested managed folder which doesn't contain any descendent as object.
 	// This flag always works in conjunction with ImplicitDirectories flag.
 	//
-	// (a) If only ImplicitDirectories is true, all managed folders are listed other than above two mentioned case.
-	// (b) If both ImplicitDirectories and EnableManagedFolders are true, then all the managed folders are listed including the above mentioned corner case.
-	// (c) If ImplicitDirectories is false then no managed folders are listed irrespective of EnableManagedFolders flag.
-	EnableManagedFolders bool `yaml:"enable-managed-folders"`
+	// (a) If only ImplicitDirectories is true, all managed folders are listed other than above two mentioned cases.
+	// (b) If both ImplicitDirectories and EnableEmptyManagedFolders are true, then all the managed folders are listed including the above-mentioned corner case.
+	// (c) If ImplicitDirectories is false then no managed folders are listed irrespective of EnableEmptyManagedFolders flag.
+	EnableEmptyManagedFolders bool `yaml:"enable-empty-managed-folders"`
 }
 
-type CacheDir string
+type GCSConnection struct {
+	// GRPCConnPoolSize configures the number of gRPC channel in grpc client.
+	GRPCConnPoolSize int `yaml:"grpc-conn-pool-size,omitempty"`
+}
+
+type GCSAuth struct {
+	// Authentication is enabled by default. The skip flag disables authentication. For users of the --custom-endpoint flag,
+	// please pass anonymous-access flag explicitly if you do not want authentication enabled for your workflow.
+	AnonymousAccess bool `yaml:"anonymous-access"`
+}
+
+// Enable the storage control client flow on HNS buckets to utilize new APIs.
+type EnableHNS bool
+
+type FileSystemConfig struct {
+	IgnoreInterrupts          bool  `yaml:"ignore-interrupts"`
+	DisableParallelDirops     bool  `yaml:"disable-parallel-dirops"`
+	KernelListCacheTtlSeconds int64 `yaml:"kernel-list-cache-ttl-secs"`
+}
 
 type FileCacheConfig struct {
-	MaxSizeMB             int64 `yaml:"max-size-mb"`
-	CacheFileForRangeRead bool  `yaml:"cache-file-for-range-read"`
+	MaxSizeMB                int64 `yaml:"max-size-mb"`
+	CacheFileForRangeRead    bool  `yaml:"cache-file-for-range-read"`
+	EnableParallelDownloads  bool  `yaml:"enable-parallel-downloads,omitempty"`
+	ParallelDownloadsPerFile int   `yaml:"parallel-downloads-per-file,omitempty"`
+	MaxParallelDownloads     int   `yaml:"max-parallel-downloads,omitempty"`
+	DownloadChunkSizeMB      int   `yaml:"download-chunk-size-mb,omitempty"`
+	EnableCRC                bool  `yaml:"enable-crc"`
 }
 
 type MetadataCacheConfig struct {
@@ -102,9 +141,13 @@ type MountConfig struct {
 	WriteConfig         `yaml:"write"`
 	LogConfig           `yaml:"logging"`
 	FileCacheConfig     `yaml:"file-cache"`
-	CacheDir            `yaml:"cache-dir"`
+	CacheDir            string `yaml:"cache-dir"`
 	MetadataCacheConfig `yaml:"metadata-cache"`
 	ListConfig          `yaml:"list"`
+	GCSConnection       `yaml:"gcs-connection"`
+	GCSAuth             `yaml:"gcs-auth"`
+	EnableHNS           `yaml:"enable-hns"`
+	FileSystemConfig    `yaml:"file-system"`
 }
 
 // LogRotateConfig defines the parameters for log rotation. It consists of three
@@ -139,7 +182,12 @@ func NewMountConfig() *MountConfig {
 		LogRotateConfig: DefaultLogRotateConfig(),
 	}
 	mountConfig.FileCacheConfig = FileCacheConfig{
-		MaxSizeMB: DefaultFileCacheMaxSizeMB,
+		MaxSizeMB:                DefaultFileCacheMaxSizeMB,
+		EnableParallelDownloads:  DefaultEnableParallelDownloads,
+		ParallelDownloadsPerFile: DefaultParallelDownloadsPerFile,
+		MaxParallelDownloads:     DefaultMaxParallelDownloads(),
+		DownloadChunkSizeMB:      DefaultDownloadChunkSizeMB,
+		EnableCRC:                DefaultEnableCRC,
 	}
 	mountConfig.MetadataCacheConfig = MetadataCacheConfig{
 		TtlInSeconds:       TtlInSecsUnsetSentinel,
@@ -147,7 +195,21 @@ func NewMountConfig() *MountConfig {
 		StatCacheMaxSizeMB: StatCacheMaxSizeMBUnsetSentinel,
 	}
 	mountConfig.ListConfig = ListConfig{
-		EnableManagedFolders: DefaultEnableManagedFolderListing,
+		EnableEmptyManagedFolders: DefaultEnableEmptyManagedFoldersListing,
 	}
+	mountConfig.GCSConnection = GCSConnection{
+		GRPCConnPoolSize: DefaultGrpcConnPoolSize,
+	}
+	mountConfig.GCSAuth = GCSAuth{
+		AnonymousAccess: DefaultAnonymousAccess,
+	}
+	mountConfig.EnableHNS = DefaultEnableHNS
+
+	mountConfig.FileSystemConfig = FileSystemConfig{
+		KernelListCacheTtlSeconds: DefaultKernelListCacheTtlSeconds,
+	}
+
+	mountConfig.FileSystemConfig.IgnoreInterrupts = DefaultIgnoreInterrupts
+
 	return mountConfig
 }

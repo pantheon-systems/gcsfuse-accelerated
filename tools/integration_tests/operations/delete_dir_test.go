@@ -20,15 +20,14 @@ import (
 	"path"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 func TestDeleteEmptyExplicitDir(t *testing.T) {
-	// Clean the mountedDirectory before running test.
-	setup.CleanMntDir()
+	testDir := setup.SetupTestDirectory(DirForOperationTests)
 
-	dirPath := path.Join(setup.MntDir(), EmptyExplicitDirectoryForDeleteTest)
+	dirPath := path.Join(testDir, EmptyExplicitDirectoryForDeleteTest)
 	operations.CreateDirectoryWithNFiles(0, dirPath, "", t)
 
 	err := os.RemoveAll(dirPath)
@@ -43,10 +42,9 @@ func TestDeleteEmptyExplicitDir(t *testing.T) {
 }
 
 func TestDeleteNonEmptyExplicitDir(t *testing.T) {
-	// Clean the mountedDirectory before running tests.
-	setup.CleanMntDir()
+	testDir := setup.SetupTestDirectory(DirForOperationTests)
 
-	dirPath := path.Join(setup.MntDir(), NonEmptyExplicitDirectoryForDeleteTest)
+	dirPath := path.Join(testDir, NonEmptyExplicitDirectoryForDeleteTest)
 	operations.CreateDirectoryWithNFiles(NumberOfFilesInNonEmptyExplicitDirectoryForDeleteTest, dirPath, PrefixFilesInNonEmptyExplicitDirectoryForDeleteTest, t)
 
 	subDirPath := path.Join(dirPath, NonEmptyExplicitSubDirectoryForDeleteTest)

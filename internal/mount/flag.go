@@ -20,22 +20,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/config"
-	"github.com/googlecloudplatform/gcsfuse/internal/util"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/util"
 )
 
 type ClientProtocol string
 
 const (
+	// Deprecated: Use the constant from cfg package
 	HTTP1 ClientProtocol = "http1"
+	// Deprecated: Use the constant from cfg package
 	HTTP2 ClientProtocol = "http2"
+	// Deprecated: Use the constant from cfg package
+	GRPC ClientProtocol = "grpc"
 	// DefaultStatOrTypeCacheTTL is the default value used for
 	// stat-cache-ttl or type-cache-ttl if they have not been set
 	// by the user.
 	DefaultStatOrTypeCacheTTL time.Duration = time.Minute
 	// DefaultStatCacheCapacity is the default value for stat-cache-capacity.
 	// This is equivalent of setting metadata-cache: stat-cache-max-size-mb.
-	DefaultStatCacheCapacity = 12710
+	DefaultStatCacheCapacity = 20460
 	// DefaultStatCacheMaxSizeMB is the default for stat-cache-max-size-mb
 	// and is to be used when neither stat-cache-max-size-mb nor
 	// stat-cache-capacity is set.
@@ -44,7 +48,7 @@ const (
 	// meant for two purposes.
 	// 1. for conversion from stat-cache-capacity to stat-cache-max-size-mb.
 	// 2. internal testing.
-	AverageSizeOfPositiveStatCacheEntry uint64 = 2400
+	AverageSizeOfPositiveStatCacheEntry uint64 = 1400
 	// AverageSizeOfNegativeStatCacheEntry is the assumed size of each negative stat-cache-entry,
 	// meant for two purposes..
 	// 1. for conversion from stat-cache-capacity to stat-cache-max-size-mb.
@@ -54,7 +58,7 @@ const (
 
 func (cp ClientProtocol) IsValid() bool {
 	switch cp {
-	case HTTP1, HTTP2:
+	case HTTP1, HTTP2, GRPC:
 		return true
 	}
 	return false

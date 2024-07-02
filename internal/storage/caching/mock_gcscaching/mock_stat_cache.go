@@ -12,8 +12,8 @@ import (
 	time "time"
 	unsafe "unsafe"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/metadata"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/metadata"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
 	oglemock "github.com/jacobsa/oglemock"
 )
 
@@ -78,7 +78,7 @@ func (m *mockStatCache) Erase(p0 string) {
 	}
 }
 
-func (m *mockStatCache) Insert(p0 *gcs.Object, p1 time.Time) {
+func (m *mockStatCache) Insert(p0 *gcs.MinObject, p1 time.Time) {
 	// Get a file name and line number for the caller.
 	_, file, line, _ := runtime.Caller(1)
 
@@ -95,7 +95,7 @@ func (m *mockStatCache) Insert(p0 *gcs.Object, p1 time.Time) {
 	}
 }
 
-func (m *mockStatCache) LookUp(p0 string, p1 time.Time) (o0 bool, o1 *gcs.Object) {
+func (m *mockStatCache) LookUp(p0 string, p1 time.Time) (o0 bool, o1 *gcs.MinObject) {
 	// Get a file name and line number for the caller.
 	_, file, line, _ := runtime.Caller(1)
 
@@ -116,9 +116,9 @@ func (m *mockStatCache) LookUp(p0 string, p1 time.Time) (o0 bool, o1 *gcs.Object
 		o0 = retVals[0].(bool)
 	}
 
-	// o1 *gcs.Object
+	// o1 *gcs.MinObject
 	if retVals[1] != nil {
-		o1 = retVals[1].(*gcs.Object)
+		o1 = retVals[1].(*gcs.MinObject)
 	}
 
 	return

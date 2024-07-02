@@ -19,13 +19,16 @@ import (
 	"log"
 	"sync"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/log_parser/json_parser/read_logs"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/test_setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/client"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/log_parser/json_parser/read_logs"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/test_setup"
 	"github.com/jacobsa/ogletest"
+	"github.com/stretchr/testify/require"
 )
 
 ////////////////////////////////////////////////////////////////////////
@@ -46,7 +49,7 @@ func (s *cacheFileForRangeReadFalseTest) Setup(t *testing.T) {
 }
 
 func (s *cacheFileForRangeReadFalseTest) Teardown(t *testing.T) {
-	unmountGCSFuseAndDeleteLogFile()
+	setup.UnmountGCSFuseAndDeleteLogFile(rootDir)
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -68,9 +71,9 @@ func (s *cacheFileForRangeReadFalseTest) TestRangeReadsWithCacheMiss(t *testing.
 	testFileName := setupFileInTestDir(s.ctx, s.storageClient, testDirName, fileSizeForRangeRead, t)
 
 	// Do a random read on file and validate from gcs.
-	expectedOutcome1 := readChunkAndValidateObjectContentsFromGCS(s.ctx, s.storageClient, testFileName, offsetForFirstRangeRead, t)
+	expectedOutcome1 := readChunkAndValidateObjectContentsFromGCS(s.ctx, s.storageClient, testFileName, offset5000, t)
 	// Read file again from offset 1000 and validate from gcs.
-	expectedOutcome2 := readChunkAndValidateObjectContentsFromGCS(s.ctx, s.storageClient, testFileName, offsetForSecondRangeRead, t)
+	expectedOutcome2 := readChunkAndValidateObjectContentsFromGCS(s.ctx, s.storageClient, testFileName, offset1000, t)
 
 	structuredReadLogs := read_logs.GetStructuredLogsSortedByTimestamp(setup.LogFile(), t)
 	validate(expectedOutcome1, structuredReadLogs[0], false, false, 1, t)
@@ -81,8 +84,9 @@ func (s *cacheFileForRangeReadFalseTest) TestRangeReadsWithCacheMiss(t *testing.
 func (s *cacheFileForRangeReadFalseTest) TestConcurrentReads_ReadIsTreatedNonSequentialAfterFileIsRemovedFromCache(t *testing.T) {
 	var testFileNames [2]string
 	var expectedOutcome [2]*Expected
-	testFileNames[0] = setupFileInTestDir(s.ctx, s.storageClient, testDirName, fileSizeForRangeRead, t)
-	testFileNames[1] = setupFileInTestDir(s.ctx, s.storageClient, testDirName, fileSizeForRangeRead, t)
+	testFileNames[0] = setupFileInTestDir(s.ctx, s.storageClient, testDirName, fileSizeSameAsCacheCapacity, t)
+	testFileNames[1] = setupFileInTestDir(s.ctx, s.storageClient, testDirName, fileSizeSameAsCacheCapacity, t)
+	randomReadChunkCount := fileSizeSameAsCacheCapacity / chunkSizeToRead
 
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
@@ -92,6 +96,7 @@ func (s *cacheFileForRangeReadFalseTest) TestConcurrentReads_ReadIsTreatedNonSeq
 	wg.Wait()
 
 	structuredReadLogs := read_logs.GetStructuredLogsSortedByTimestamp(setup.LogFile(), t)
+	require.Equal(t, 2, len(structuredReadLogs))
 	// Goroutine execution order isn't guaranteed.
 	// If the object name in expected outcome doesn't align with the logs, swap
 	// the expected outcome objects and file names at positions 0 and 1.
@@ -109,7 +114,7 @@ func (s *cacheFileForRangeReadFalseTest) TestConcurrentReads_ReadIsTreatedNonSeq
 	ogletest.ExpectEq(true, structuredReadLogs[1].Chunks[randomReadChunkCount-1].CacheHit)
 
 	validateFileIsNotCached(testFileNames[0], t)
-	validateFileInCacheDirectory(testFileNames[1], fileSizeForRangeRead, s.ctx, s.storageClient, t)
+	validateFileInCacheDirectory(testFileNames[1], fileSizeSameAsCacheCapacity, s.ctx, s.storageClient, t)
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -119,8 +124,13 @@ func (s *cacheFileForRangeReadFalseTest) TestConcurrentReads_ReadIsTreatedNonSeq
 func TestCacheFileForRangeReadFalseTest(t *testing.T) {
 	ts := &cacheFileForRangeReadFalseTest{ctx: context.Background()}
 	// Create storage client before running tests.
-	closeStorageClient := createStorageClient(t, &ts.ctx, &ts.storageClient)
-	defer closeStorageClient()
+	closeStorageClient := client.CreateStorageClientWithTimeOut(&ts.ctx, &ts.storageClient, 15*time.Minute)
+	defer func() {
+		err := closeStorageClient()
+		if err != nil {
+			t.Errorf("closeStorageClient failed: %v", err)
+		}
+	}()
 
 	// Run tests for mounted directory if the flag is set.
 	if setup.AreBothMountedDirectoryAndTestBucketFlagsSet() {
@@ -129,16 +139,16 @@ func TestCacheFileForRangeReadFalseTest(t *testing.T) {
 	}
 
 	// Define flag set to run the tests.
-	flagSet := [][]string{
+	flagsSet := [][]string{
 		{"--implicit-dirs=true"},
 		{"--implicit-dirs=false"},
 	}
-	appendFlags(&flagSet,
+	setup.AppendFlagsToAllFlagsInTheFlagsSet(&flagsSet,
 		"--config-file="+createConfigFile(cacheCapacityForRangeReadTestInMiB, false, configFileName))
-	appendFlags(&flagSet, "--o=ro", "")
+	setup.AppendFlagsToAllFlagsInTheFlagsSet(&flagsSet, "--o=ro", "")
 
 	// Run tests.
-	for _, flags := range flagSet {
+	for _, flags := range flagsSet {
 		ts.flags = flags
 		log.Printf("Running tests with flags: %s", ts.flags)
 		test_setup.RunTests(t, ts)

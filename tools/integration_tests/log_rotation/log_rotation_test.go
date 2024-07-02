@@ -17,13 +17,18 @@
 package log_rotation
 
 import (
+	"context"
+	"log"
 	"os"
 	"path"
 	"testing"
+	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/config"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/static_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"cloud.google.com/go/storage"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/client"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/static_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 const (
@@ -36,8 +41,10 @@ const (
 	logFileCount       = activeLogFileCount + backupLogFileCount
 )
 
-var logDirPath string
-var logFilePath string
+var (
+	logDirPath  string
+	logFilePath string
+)
 
 func getMountConfigForLogRotation(maxFileSizeMB, backupFileCount int, compress bool,
 	logFilePath string) config.MountConfig {
@@ -62,6 +69,16 @@ func getMountConfigForLogRotation(maxFileSizeMB, backupFileCount int, compress b
 func TestMain(m *testing.M) {
 	setup.ParseSetUpFlags()
 
+	var storageClient *storage.Client
+	ctx := context.Background()
+	closeStorageClient := client.CreateStorageClientWithTimeOut(&ctx, &storageClient, time.Minute*15)
+	defer func() {
+		err := closeStorageClient()
+		if err != nil {
+			log.Fatalf("closeStorageClient failed: %v", err)
+		}
+	}()
+
 	setup.ExitWithFailureIfBothTestBucketAndMountedDirectoryFlagsAreNotSet()
 
 	// Run tests for mountedDirectory only if --mountedDirectory flag is set.
@@ -77,6 +94,7 @@ func TestMain(m *testing.M) {
 	// Set up directory for logs.
 	logDirPath = setup.SetUpLogDirForTestDirTests(logDirName)
 	logFilePath = path.Join(logDirPath, logFileName)
+	setup.SetLogFile(logFilePath)
 
 	// Set up config files.
 	// TODO: add tests for backupLogFileCount = 0.
@@ -97,7 +115,6 @@ func TestMain(m *testing.M) {
 	successCode := static_mounting.RunTests(flags, m)
 
 	// Clean up test directory created.
-	setup.CleanupDirectoryOnGCS(path.Join(setup.TestBucket(), testDirName))
-	setup.RemoveBinFileCopiedForTesting()
+	setup.CleanupDirectoryOnGCS(ctx, storageClient, path.Join(setup.TestBucket(), testDirName))
 	os.Exit(successCode)
 }

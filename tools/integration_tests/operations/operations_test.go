@@ -1,4 +1,4 @@
-// Copyright 2023 Google Inc. All Rights Reserved.
+// Copyright 2024 Google Inc. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,20 +16,25 @@
 package operations_test
 
 import (
+	"context"
 	"log"
 	"os"
 	"path"
 	"testing"
+	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/config"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/creds_tests"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/dynamic_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/only_dir_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/persistent_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/static_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"cloud.google.com/go/storage"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/client"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/creds_tests"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/dynamic_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/only_dir_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/persistent_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/static_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
+const DirForOperationTests = "dirForOperationsTest"
 const MoveFile = "move.txt"
 const MoveFileContent = "This is from move file in Test directory.\n"
 const SrcCopyDirectory = "srcCopyDir"
@@ -84,9 +89,11 @@ const NumberOfObjectsInDirThreeInCreateThreeLevelDirTest = 1
 const PrefixFileInDirThreeInCreateThreeLevelDirTest = "fileInDirThreeInCreateThreeLevelDirTest"
 const FileInDirThreeInCreateThreeLevelDirTest = "fileInDirThreeInCreateThreeLevelDirTest1"
 const ContentInFileInDirThreeInCreateThreeLevelDirTest = "Hello world!!"
+const Content = "line 1\nline 2\n"
+const onlyDirMounted = "OnlyDirMountOperations"
 
 func createMountConfigsAndEquivalentFlags() (flags [][]string) {
-	cacheDirPath := path.Join(os.Getenv("HOME"), "cache-dri")
+	cacheDirPath := path.Join(os.Getenv("HOME"), "operations-cache-dir")
 
 	// Set up config file with create-empty-file: true.
 	mountConfig1 := config.MountConfig{
@@ -108,7 +115,7 @@ func createMountConfigsAndEquivalentFlags() (flags [][]string) {
 			// files
 			MaxSizeMB: 2,
 		},
-		CacheDir: config.CacheDir(cacheDirPath),
+		CacheDir: cacheDirPath,
 		LogConfig: config.LogConfig{
 			Severity:        config.TRACE,
 			LogRotateConfig: config.DefaultLogRotateConfig(),
@@ -116,6 +123,19 @@ func createMountConfigsAndEquivalentFlags() (flags [][]string) {
 	}
 	filePath2 := setup.YAMLConfigFile(mountConfig2, "config2.yaml")
 	flags = append(flags, []string{"--config-file=" + filePath2})
+
+	mountConfig3 := config.MountConfig{
+		// Run with metadata caches disabled.
+		MetadataCacheConfig: config.MetadataCacheConfig{
+			TtlInSeconds: 0,
+		},
+		LogConfig: config.LogConfig{
+			Severity:        config.TRACE,
+			LogRotateConfig: config.DefaultLogRotateConfig(),
+		},
+	}
+	filePath3 := setup.YAMLConfigFile(mountConfig3, "config3.yaml")
+	flags = append(flags, []string{"--config-file=" + filePath3})
 
 	return flags
 }
@@ -125,46 +145,71 @@ func TestMain(m *testing.M) {
 
 	setup.ExitWithFailureIfBothTestBucketAndMountedDirectoryFlagsAreNotSet()
 
-	if setup.TestBucket() != "" && setup.MountedDirectory() != "" {
-		log.Print("Both --testbucket and --mountedDirectory can't be specified at the same time.")
-		os.Exit(1)
+	// Create storage client before running tests.
+	ctx := context.Background()
+	var storageClient *storage.Client
+	closeStorageClient := client.CreateStorageClientWithTimeOut(&ctx, &storageClient, time.Minute*40)
+	defer func() {
+		err := closeStorageClient()
+		if err != nil {
+			log.Fatalf("closeStorageClient failed: %v", err)
+		}
+	}()
+	// To run mountedDirectory tests, we need both testBucket and mountedDirectory
+	// flags to be set, as operations tests validates content from the bucket.
+	if setup.AreBothMountedDirectoryAndTestBucketFlagsSet() {
+		setup.RunTestsForMountedDirectoryFlag(m)
 	}
-
-	// Run tests for mountedDirectory only if --mountedDirectory flag is set.
-	setup.RunTestsForMountedDirectoryFlag(m)
 
 	// Run tests for testBucket
 	// Set up test directory.
 	setup.SetUpTestDirForTestBucketFlag()
 	// Set up flags to run tests on.
-	flags := [][]string{
+	// Note: GRPC related tests will work only if you have allow-list bucket.
+	// Note: We are not testing specifically for implicit-dirs because they are covered as part of the other flags.
+	flagsSet := [][]string{
 		// By default, creating emptyFile is disabled.
-		{"--implicit-dirs=true"},
-		{"--implicit-dirs=false"},
 		{"--experimental-enable-json-read=true", "--implicit-dirs=true"}}
+
+	// gRPC tests will not run in TPC environment
+	if !testing.Short() && !setup.TestOnTPCEndPoint() {
+		flagsSet = append(flagsSet, []string{"--client-protocol=grpc", "--implicit-dirs=true"})
+	}
+
+	// HNS tests utilize the gRPC protocol, which is not supported by TPC.
+	if !setup.TestOnTPCEndPoint() {
+		if hnsFlagSet, err := setup.AddHNSFlagForHierarchicalBucket(ctx, storageClient); err == nil {
+			flagsSet = append(flagsSet, hnsFlagSet)
+		}
+	}
+
 	mountConfigFlags := createMountConfigsAndEquivalentFlags()
-	flags = append(flags, mountConfigFlags...)
+	flagsSet = append(flagsSet, mountConfigFlags...)
 
-	successCode := static_mounting.RunTests(flags, m)
+	// Only running static_mounting test for TPC.
+	if setup.TestOnTPCEndPoint() {
+		successCodeTPC := static_mounting.RunTests(flagsSet, m)
+		os.Exit(successCodeTPC)
+	}
+
+	successCode := static_mounting.RunTests(flagsSet, m)
 
 	if successCode == 0 {
-		successCode = only_dir_mounting.RunTests(flags, m)
+		successCode = only_dir_mounting.RunTests(flagsSet, onlyDirMounted, m)
 	}
 
 	if successCode == 0 {
-		successCode = persistent_mounting.RunTests(flags, m)
+		successCode = persistent_mounting.RunTests(flagsSet, m)
 	}
 
 	if successCode == 0 {
-		successCode = dynamic_mounting.RunTests(flags, m)
+		successCode = dynamic_mounting.RunTests(ctx, storageClient, flagsSet, m)
 	}
 
 	if successCode == 0 {
 		// Test for admin permission on test bucket.
-		successCode = creds_tests.RunTestsForKeyFileAndGoogleApplicationCredentialsEnvVarSet(flags, "objectAdmin", m)
+		successCode = creds_tests.RunTestsForKeyFileAndGoogleApplicationCredentialsEnvVarSet(flagsSet, "objectAdmin", m)
 	}
-
-	setup.RemoveBinFileCopiedForTesting()
 
 	os.Exit(successCode)
 }

@@ -21,14 +21,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
 
 	"cloud.google.com/go/storage"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/client"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/log_parser/json_parser/read_logs"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/dynamic_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/test_setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/client"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/log_parser/json_parser/read_logs"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/dynamic_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/test_setup"
 )
 
 ////////////////////////////////////////////////////////////////////////
@@ -47,7 +47,7 @@ func (s *remountTest) Setup(t *testing.T) {
 }
 
 func (s *remountTest) Teardown(t *testing.T) {
-	unmountGCSFuseAndDeleteLogFile()
+	setup.UnmountGCSFuseAndDeleteLogFile(rootDir)
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -91,12 +91,12 @@ func (s *remountTest) TestCacheIsNotReusedOnDynamicRemount(t *testing.T) {
 	runTestsOnlyForDynamicMount(t)
 	testBucket1 := setup.TestBucket()
 	testFileName1 := setupFileInTestDir(s.ctx, s.storageClient, testDirName, fileSize, t)
-	testBucket2 := dynamic_mounting.CreateTestBucketForDynamicMounting()
-	defer dynamic_mounting.DeleteTestBucketForDynamicMounting(testBucket2)
+	testBucket2 := dynamic_mounting.CreateTestBucketForDynamicMounting(ctx, storageClient)
+	defer dynamic_mounting.DeleteTestBucketForDynamicMounting(ctx, storageClient, testBucket2)
 	setup.SetDynamicBucketMounted(testBucket2)
 	defer setup.SetDynamicBucketMounted("")
-	// Introducing a sleep of 7 seconds after bucket creation to address propagation delays.
-	time.Sleep(7 * time.Second)
+	// Introducing a sleep of 10 seconds after bucket creation to address propagation delays.
+	time.Sleep(10 * time.Second)
 	client.SetupTestDirectory(s.ctx, s.storageClient, testDirName)
 	testFileName2 := setupFileInTestDir(s.ctx, s.storageClient, testDirName, fileSize, t)
 
@@ -131,20 +131,25 @@ func TestRemountTest(t *testing.T) {
 		t.SkipNow()
 	}
 	// Define flag set to run the tests.
-	flagSet := [][]string{
+	flagsSet := [][]string{
 		{"--implicit-dirs=true"},
 		{"--implicit-dirs=false"},
 	}
-	appendFlags(&flagSet, "--config-file="+createConfigFile(cacheCapacityInMB, false, configFileName))
-	appendFlags(&flagSet, "--o=ro", "")
+	setup.AppendFlagsToAllFlagsInTheFlagsSet(&flagsSet, "--config-file="+createConfigFile(cacheCapacityInMB, false, configFileName))
+	setup.AppendFlagsToAllFlagsInTheFlagsSet(&flagsSet, "--o=ro", "")
 
 	// Create storage client before running tests.
 	ts := &remountTest{ctx: context.Background()}
-	closeStorageClient := createStorageClient(t, &ts.ctx, &ts.storageClient)
-	defer closeStorageClient()
+	closeStorageClient := client.CreateStorageClientWithTimeOut(&ts.ctx, &ts.storageClient, 15*time.Minute)
+	defer func() {
+		err := closeStorageClient()
+		if err != nil {
+			t.Errorf("closeStorageClient failed: %v", err)
+		}
+	}()
 
 	// Run tests.
-	for _, flags := range flagSet {
+	for _, flags := range flagsSet {
 		ts.flags = flags
 		log.Printf("Running tests with flags: %s", ts.flags)
 		test_setup.RunTests(t, ts)

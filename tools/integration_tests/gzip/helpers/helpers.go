@@ -24,9 +24,9 @@ import (
 	"path"
 	"strings"
 
-	"cloud.google.com/go/storage"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	client2 "github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/client"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 const (
@@ -137,7 +137,7 @@ func DownloadGzipGcsObjectAsCompressed(bucketName, objPathInBucket string) (stri
 	}
 
 	ctx := context.Background()
-	client, err := storage.NewClient(ctx)
+	client, err := client2.CreateStorageClient(ctx)
 	if err != nil || client == nil {
 		return "", fmt.Errorf("failed to create storage client: %w", err)
 	}

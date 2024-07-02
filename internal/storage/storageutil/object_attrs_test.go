@@ -16,13 +16,12 @@ package storageutil
 
 import (
 	"crypto/md5"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
 	. "github.com/jacobsa/ogletest"
 	storagev1 "google.golang.org/api/storage/v1"
 )
@@ -224,7 +223,7 @@ func (t objectAttrsTest) Test_ConvertObjToMinObject_WithNilObject() {
 
 	gcsMinObject := ConvertObjToMinObject(gcsObject)
 
-	ExpectTrue(reflect.DeepEqual(gcs.MinObject{}, gcsMinObject))
+	ExpectEq(nil, gcsMinObject)
 }
 
 func (t objectAttrsTest) Test_ConvertObjToMinObject_WithValidObject() {
@@ -235,6 +234,7 @@ func (t objectAttrsTest) Test_ConvertObjToMinObject_WithValidObject() {
 	currentTime := time.Now()
 	contentEncode := "test_encoding"
 	metadata := map[string]string{"test_key": "test_value"}
+	var crc32C uint32 = 1234
 	gcsObject := gcs.Object{
 		Name:            name,
 		Size:            size,
@@ -243,10 +243,12 @@ func (t objectAttrsTest) Test_ConvertObjToMinObject_WithValidObject() {
 		Updated:         currentTime,
 		Metadata:        metadata,
 		ContentEncoding: contentEncode,
+		CRC32C:          &crc32C,
 	}
 
 	gcsMinObject := ConvertObjToMinObject(&gcsObject)
 
+	AssertNe(nil, gcsMinObject)
 	ExpectEq(name, gcsMinObject.Name)
 	ExpectEq(size, gcsMinObject.Size)
 	ExpectEq(generation, gcsMinObject.Generation)
@@ -254,4 +256,184 @@ func (t objectAttrsTest) Test_ConvertObjToMinObject_WithValidObject() {
 	ExpectTrue(currentTime.Equal(gcsMinObject.Updated))
 	ExpectEq(contentEncode, gcsMinObject.ContentEncoding)
 	ExpectEq(metadata, gcsMinObject.Metadata)
+	ExpectEq(crc32C, *gcsMinObject.CRC32C)
+}
+
+func (t objectAttrsTest) Test_ConvertObjToExtendedObjectAttributes_WithNilObject() {
+	var gcsObject *gcs.Object
+
+	extendedObjAttr := ConvertObjToExtendedObjectAttributes(gcsObject)
+
+	ExpectEq(nil, extendedObjAttr)
+}
+
+func (t objectAttrsTest) Test_ConvertObjToExtendedObjectAttributes_WithValidObject() {
+	var attrMd5 *[16]byte
+	timeAttr := time.Now()
+	gcsObject := gcs.Object{
+		ContentType:        "ContentType",
+		ContentLanguage:    "ContentLanguage",
+		CacheControl:       "CacheControl",
+		Owner:              "Owner",
+		MD5:                attrMd5,
+		MediaLink:          "MediaLink",
+		StorageClass:       "StorageClass",
+		Deleted:            timeAttr,
+		ComponentCount:     7,
+		ContentDisposition: "ContentDisposition",
+		CustomTime:         timeAttr.String(),
+		EventBasedHold:     true,
+		Acl:                nil,
+	}
+
+	extendedObjAttr := ConvertObjToExtendedObjectAttributes(&gcsObject)
+
+	AssertNe(nil, extendedObjAttr)
+	ExpectEq(gcsObject.ContentType, extendedObjAttr.ContentType)
+	ExpectEq(gcsObject.ContentLanguage, extendedObjAttr.ContentLanguage)
+	ExpectEq(gcsObject.CacheControl, extendedObjAttr.CacheControl)
+	ExpectEq(gcsObject.Owner, extendedObjAttr.Owner)
+	ExpectEq(gcsObject.MD5, extendedObjAttr.MD5)
+	ExpectEq(gcsObject.MediaLink, extendedObjAttr.MediaLink)
+	ExpectEq(gcsObject.StorageClass, extendedObjAttr.StorageClass)
+	ExpectEq(0, gcsObject.Deleted.Compare(extendedObjAttr.Deleted))
+	ExpectEq(gcsObject.ComponentCount, extendedObjAttr.ComponentCount)
+	ExpectEq(gcsObject.ContentDisposition, extendedObjAttr.ContentDisposition)
+	ExpectEq(gcsObject.CustomTime, extendedObjAttr.CustomTime)
+	ExpectEq(gcsObject.EventBasedHold, extendedObjAttr.EventBasedHold)
+	ExpectEq(gcsObject.Acl, extendedObjAttr.Acl)
+}
+
+func (t objectAttrsTest) Test_ConvertObjToExtendedObjectAttributes_WithNilMinObjectAndNilAttributes() {
+	var minObject *gcs.MinObject
+	var extendedObjectAttr *gcs.ExtendedObjectAttributes
+
+	object := ConvertMinObjectAndExtendedObjectAttributesToObject(minObject, extendedObjectAttr)
+
+	ExpectEq(nil, object)
+}
+
+func (t objectAttrsTest) Test_ConvertObjToExtendedObjectAttributes_WithNilMinObjectAndNonNilAttributes() {
+	var minObject *gcs.MinObject
+	extendedObjectAttr := &gcs.ExtendedObjectAttributes{
+		ContentType: "ContentType",
+	}
+
+	object := ConvertMinObjectAndExtendedObjectAttributesToObject(minObject, extendedObjectAttr)
+
+	ExpectEq(nil, object)
+}
+
+func (t objectAttrsTest) Test_ConvertObjToExtendedObjectAttributes_WithNonNilMinObjectAndNilAttributes() {
+	name := "test"
+	minObject := &gcs.MinObject{
+		Name: name,
+	}
+	var extendedObjectAttr *gcs.ExtendedObjectAttributes
+
+	object := ConvertMinObjectAndExtendedObjectAttributesToObject(minObject, extendedObjectAttr)
+
+	ExpectEq(nil, object)
+}
+
+func (t objectAttrsTest) Test_ConvertObjToExtendedObjectAttributes_WithNonNilMinObjectAndNonNilAttributes() {
+	var attrMd5 *[16]byte
+	timeAttr := time.Now()
+	minObject := &gcs.MinObject{
+		Name:            "test",
+		Size:            uint64(36),
+		Generation:      int64(444),
+		MetaGeneration:  int64(555),
+		Updated:         timeAttr,
+		Metadata:        map[string]string{"test_key": "test_value"},
+		ContentEncoding: "test_encoding",
+	}
+	extendedObjAttr := &gcs.ExtendedObjectAttributes{
+		ContentType:        "ContentType",
+		ContentLanguage:    "ContentLanguage",
+		CacheControl:       "CacheControl",
+		Owner:              "Owner",
+		MD5:                attrMd5,
+		MediaLink:          "MediaLink",
+		StorageClass:       "StorageClass",
+		Deleted:            timeAttr,
+		ComponentCount:     7,
+		ContentDisposition: "ContentDisposition",
+		CustomTime:         timeAttr.String(),
+		EventBasedHold:     true,
+		Acl:                nil,
+	}
+
+	gcsObject := ConvertMinObjectAndExtendedObjectAttributesToObject(minObject, extendedObjAttr)
+
+	AssertNe(nil, gcsObject)
+	ExpectEq(gcsObject.Name, minObject.Name)
+	ExpectEq(gcsObject.Size, minObject.Size)
+	ExpectEq(gcsObject.Generation, minObject.Generation)
+	ExpectEq(gcsObject.MetaGeneration, minObject.MetaGeneration)
+	ExpectEq(0, gcsObject.Updated.Compare(minObject.Updated))
+	ExpectEq(gcsObject.Metadata, minObject.Metadata)
+	ExpectEq(gcsObject.ContentEncoding, minObject.ContentEncoding)
+	ExpectEq(gcsObject.ContentType, extendedObjAttr.ContentType)
+	ExpectEq(gcsObject.ContentLanguage, extendedObjAttr.ContentLanguage)
+	ExpectEq(gcsObject.CacheControl, extendedObjAttr.CacheControl)
+	ExpectEq(gcsObject.Owner, extendedObjAttr.Owner)
+	ExpectEq(gcsObject.MD5, extendedObjAttr.MD5)
+	ExpectEq(gcsObject.MediaLink, extendedObjAttr.MediaLink)
+	ExpectEq(gcsObject.StorageClass, extendedObjAttr.StorageClass)
+	ExpectEq(0, gcsObject.Deleted.Compare(extendedObjAttr.Deleted))
+	ExpectEq(gcsObject.ComponentCount, extendedObjAttr.ComponentCount)
+	ExpectEq(gcsObject.ContentDisposition, extendedObjAttr.ContentDisposition)
+	ExpectEq(gcsObject.CustomTime, extendedObjAttr.CustomTime)
+	ExpectEq(gcsObject.EventBasedHold, extendedObjAttr.EventBasedHold)
+	ExpectEq(gcsObject.Acl, extendedObjAttr.Acl)
+}
+
+func (t objectAttrsTest) Test_ConvertMinObjectToObject_WithNilMinObject() {
+	var minObject *gcs.MinObject
+
+	object := ConvertMinObjectToObject(minObject)
+
+	ExpectEq(nil, object)
+}
+
+func (t objectAttrsTest) Test_ConvertMinObjectToObject_WithNonNilMinObject() {
+	var attrMd5 *[16]byte
+	var crc32C uint32 = 1234
+	timeAttr := time.Now()
+	minObject := &gcs.MinObject{
+		Name:            "test",
+		Size:            uint64(36),
+		Generation:      int64(444),
+		MetaGeneration:  int64(555),
+		Updated:         timeAttr,
+		Metadata:        map[string]string{"test_key": "test_value"},
+		ContentEncoding: "test_encoding",
+		CRC32C:          &crc32C,
+	}
+
+	gcsObject := ConvertMinObjectToObject(minObject)
+
+	AssertNe(nil, gcsObject)
+	ExpectEq(gcsObject.Name, minObject.Name)
+	ExpectEq(gcsObject.Size, minObject.Size)
+	ExpectEq(gcsObject.Generation, minObject.Generation)
+	ExpectEq(gcsObject.MetaGeneration, minObject.MetaGeneration)
+	ExpectEq(0, gcsObject.Updated.Compare(minObject.Updated))
+	ExpectEq(gcsObject.Metadata, minObject.Metadata)
+	ExpectEq(gcsObject.ContentEncoding, minObject.ContentEncoding)
+	ExpectEq(gcsObject.ContentType, "")
+	ExpectEq(gcsObject.ContentLanguage, "")
+	ExpectEq(gcsObject.CacheControl, "")
+	ExpectEq(gcsObject.Owner, "")
+	ExpectEq(gcsObject.MD5, attrMd5)
+	ExpectEq(*gcsObject.CRC32C, crc32C)
+	ExpectEq(gcsObject.MediaLink, "")
+	ExpectEq(gcsObject.StorageClass, "")
+	ExpectEq(0, gcsObject.Deleted.Compare(time.Time{}))
+	ExpectEq(gcsObject.ComponentCount, 0)
+	ExpectEq(gcsObject.ContentDisposition, "")
+	ExpectEq(gcsObject.CustomTime, "")
+	ExpectEq(gcsObject.EventBasedHold, false)
+	ExpectEq(gcsObject.Acl, []*storagev1.ObjectAccessControl(nil))
 }

@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 // make e.g --debug_gcs in debug_gcs
@@ -50,8 +50,6 @@ func mountGcsfuseWithPersistentMounting(flags []string) (err error) {
 		"debug_fuse",
 		"-o",
 		"log_file=" + setup.LogFile(),
-		"-o",
-		"log_format=text",
 	}
 
 	persistentMountingArgs, err := makePersistentMountingArgs(flags)
@@ -69,22 +67,23 @@ func mountGcsfuseWithPersistentMounting(flags []string) (err error) {
 	return err
 }
 
-func executeTestsForPersistentMounting(flags [][]string, m *testing.M) (successCode int) {
+func executeTestsForPersistentMounting(flagsSet [][]string, m *testing.M) (successCode int) {
 	var err error
 
-	for i := 0; i < len(flags); i++ {
-		if err = mountGcsfuseWithPersistentMounting(flags[i]); err != nil {
+	for i := 0; i < len(flagsSet); i++ {
+		if err = mountGcsfuseWithPersistentMounting(flagsSet[i]); err != nil {
 			setup.LogAndExit(fmt.Sprintf("mountGcsfuse: %v\n", err))
 		}
-		successCode = setup.ExecuteTestForFlagsSet(flags[i], m)
+		log.Printf("Running persistent mounting tests with flags: %s", flagsSet[i])
+		successCode = setup.ExecuteTestForFlagsSet(flagsSet[i], m)
 	}
 	return
 }
 
-func RunTests(flags [][]string, m *testing.M) (successCode int) {
+func RunTests(flagsSet [][]string, m *testing.M) (successCode int) {
 	log.Println("Running persistent mounting tests...")
 
-	successCode = executeTestsForPersistentMounting(flags, m)
+	successCode = executeTestsForPersistentMounting(flagsSet, m)
 
 	log.Printf("Test log: %s\n", setup.LogFile())
 

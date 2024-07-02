@@ -20,12 +20,13 @@ import (
 	"os"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/only_dir_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/persistent_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/static_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/only_dir_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/persistent_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/static_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
+const DirForRenameDirLimitTests = "dirForRenameDirLimitTests"
 const DirectoryWithThreeFiles = "directoryWithThreeFiles"
 const DirectoryWithTwoFiles = "directoryWithTwoFiles"
 const DirectoryWithFourFiles = "directoryWithFourFiles"
@@ -35,6 +36,7 @@ const EmptySubDirectory = "emptySubDirectory"
 const NonEmptySubDirectory = "nonEmptySubDirectory"
 const RenamedDirectory = "renamedDirectory"
 const PrefixTempFile = "temp"
+const onlyDirMounted = "OnlyDirMountRenameDirLimit"
 
 func TestMain(m *testing.M) {
 	setup.ParseSetUpFlags()
@@ -57,14 +59,12 @@ func TestMain(m *testing.M) {
 	successCode := static_mounting.RunTests(flags, m)
 
 	if successCode == 0 {
-		successCode = only_dir_mounting.RunTests(flags, m)
+		successCode = only_dir_mounting.RunTests(flags, onlyDirMounted, m)
 	}
 
 	if successCode == 0 {
 		successCode = persistent_mounting.RunTests(flags, m)
 	}
-
-	setup.RemoveBinFileCopiedForTesting()
 
 	os.Exit(successCode)
 }

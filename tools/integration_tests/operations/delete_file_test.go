@@ -13,15 +13,15 @@
 // limitations under the License.
 
 // Provides integration tests for delete files.
-package operations
+package operations_test
 
 import (
 	"os"
 	"path"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 const DirNameInTestBucket = "A"               // testBucket/A
@@ -53,10 +53,9 @@ func createFile(filePath string, t *testing.T) {
 
 // Remove testBucket/A.txt
 func TestDeleteFileFromBucket(t *testing.T) {
-	// Clean the mountedDirectory before running test.
-	setup.CleanMntDir()
+	testDir := setup.SetupTestDirectory(DirForOperationTests)
 
-	filePath := path.Join(setup.MntDir(), FileNameInTestBucket)
+	filePath := path.Join(testDir, FileNameInTestBucket)
 
 	createFile(filePath, t)
 
@@ -65,10 +64,9 @@ func TestDeleteFileFromBucket(t *testing.T) {
 
 // Remove testBucket/A/a.txt
 func TestDeleteFileFromBucketDirectory(t *testing.T) {
-	// Clean the mountedDirectory before running test.
-	setup.CleanMntDir()
+	testDir := setup.SetupTestDirectory(DirForOperationTests)
 
-	dirPath := path.Join(setup.MntDir(), DirNameInTestBucket)
+	dirPath := path.Join(testDir, DirNameInTestBucket)
 	err := os.Mkdir(dirPath, setup.FilePermission_0600)
 	if err != nil {
 		t.Errorf("Error in creating directory: %v", err)

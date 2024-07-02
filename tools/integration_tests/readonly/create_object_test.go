@@ -21,7 +21,9 @@ import (
 	"path"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 func checkIfFileCreationFailed(filePath string, t *testing.T) {
@@ -31,19 +33,19 @@ func checkIfFileCreationFailed(filePath string, t *testing.T) {
 		t.Errorf("File is created in read-only file system.")
 	}
 
-	checkErrorForReadOnlyFileSystem(err, t)
+	operations.CheckErrorForReadOnlyFileSystem(err, t)
 
 	defer file.Close()
 }
 
 func TestCreateFile(t *testing.T) {
-	filePath := path.Join(setup.MntDir(), "testFile.txt")
+	filePath := path.Join(setup.MntDir(), TestDirForReadOnlyTest, "testFile.txt")
 
 	checkIfFileCreationFailed(filePath, t)
 }
 
 func TestCreateFileInDirectory(t *testing.T) {
-	filePath := path.Join(setup.MntDir(), DirectoryNameInTestBucket, "testFile.txt")
+	filePath := path.Join(setup.MntDir(), TestDirForReadOnlyTest, DirectoryNameInTestBucket, "testFile.txt")
 
 	checkIfFileCreationFailed(filePath, t)
 }
@@ -55,17 +57,17 @@ func checkIfDirCreationFailed(dirPath string, t *testing.T) {
 		t.Errorf("Directory is created in read-only file system.")
 	}
 
-	checkErrorForReadOnlyFileSystem(err, t)
+	operations.CheckErrorForReadOnlyFileSystem(err, t)
 }
 
 func TestCreateDir(t *testing.T) {
-	dirPath := path.Join(setup.MntDir(), "test")
+	dirPath := path.Join(setup.MntDir(), TestDirForReadOnlyTest, "test")
 
 	checkIfDirCreationFailed(dirPath, t)
 }
 
 func TestCreateSubDirectoryInDirectory(t *testing.T) {
-	dirPath := path.Join(setup.MntDir(), DirectoryNameInTestBucket, "test")
+	dirPath := path.Join(setup.MntDir(), TestDirForReadOnlyTest, DirectoryNameInTestBucket, "test")
 
 	checkIfDirCreationFailed(dirPath, t)
 }

@@ -27,7 +27,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/storageutil"
 	"github.com/jacobsa/syncutil"
 	"github.com/jacobsa/timeutil"
 )
@@ -123,9 +125,10 @@ func (s fakeObjectSlice) prefixUpperBound(prefix string) int {
 ////////////////////////////////////////////////////////////////////////
 
 type bucket struct {
-	clock timeutil.Clock
-	name  string
-	mu    syncutil.InvariantMutex
+	clock      timeutil.Clock
+	name       string
+	bucketType gcs.BucketType
+	mu         syncutil.InvariantMutex
 
 	// The set of extant objects.
 	//
@@ -434,6 +437,10 @@ func (b *bucket) Name() string {
 	return b.name
 }
 
+func (b *bucket) BucketType() gcs.BucketType {
+	return b.bucketType
+}
+
 // LOCKS_EXCLUDED(b.mu)
 func (b *bucket) ListObjects(
 	ctx context.Context,
@@ -706,9 +713,12 @@ func (b *bucket) ComposeObjects(
 }
 
 // LOCKS_EXCLUDED(b.mu)
-func (b *bucket) StatObject(
-	ctx context.Context,
-	req *gcs.StatObjectRequest) (o *gcs.Object, err error) {
+func (b *bucket) StatObject(ctx context.Context,
+	req *gcs.StatObjectRequest) (m *gcs.MinObject, e *gcs.ExtendedObjectAttributes, err error) {
+	// If ExtendedObjectAttributes are requested without fetching from gcs enabled, panic.
+	if !req.ForceFetchFromGcs && req.ReturnExtendedObjectAttributes {
+		panic("invalid StatObjectRequest: ForceFetchFromGcs: false and ReturnExtendedObjectAttributes: true")
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -723,8 +733,11 @@ func (b *bucket) StatObject(
 	}
 
 	// Make a copy to avoid handing back internal state.
-	o = copyObject(&b.objects[index].metadata)
-
+	o := copyObject(&b.objects[index].metadata)
+	m = storageutil.ConvertObjToMinObject(o)
+	if req.ReturnExtendedObjectAttributes {
+		e = storageutil.ConvertObjToExtendedObjectAttributes(o)
+	}
 	return
 }
 
@@ -853,4 +866,27 @@ func (b *bucket) DeleteObject(
 	b.objects = append(b.objects[:index], b.objects[index+1:]...)
 
 	return
+}
+
+func (b *bucket) DeleteFolder(ctx context.Context, folderName string) (err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// Do we possess the object with the given name?
+	index := b.objects.find(folderName)
+	if index == len(b.objects) {
+		return
+	}
+
+	// Remove the object.
+	b.objects = append(b.objects[:index], b.objects[index+1:]...)
+
+	return
+}
+
+func (b *bucket) GetFolder(ctx context.Context, foldername string) (*controlpb.Folder, error) {
+	folder := controlpb.Folder{
+		Name: "projects/_/buckets/" + b.Name() + "/folders/" + foldername,
+	}
+	return &folder, nil
 }

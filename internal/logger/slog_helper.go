@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/config"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
 )
 
 const (
@@ -37,7 +37,7 @@ const (
 	nanosKey     = "nanos"
 )
 
-func setLoggingLevel(level config.LogSeverity, programLevel *slog.LevelVar) {
+func setLoggingLevel(level string, programLevel *slog.LevelVar) {
 	switch level {
 	// logs having severity >= the configured value will be logged.
 	case config.TRACE:
@@ -100,10 +100,10 @@ func addPrefixToMessage(a *slog.Attr, prefix string) {
 // time="08/09/2023 09:24:54.437193"
 func customiseTimeFormat(a *slog.Attr, format string) {
 	currTime := a.Value.Any().(time.Time).Round(0)
-	if format == "json" {
-		*a = slog.Group(timestampKey, secondsKey, currTime.Unix(), nanosKey, currTime.Nanosecond())
-	} else {
+	if format == textFormat {
 		a.Value = slog.StringValue(currTime.Round(0).Format("02/01/2006 03:04:05.000000"))
+	} else {
+		*a = slog.Group(timestampKey, secondsKey, currTime.Unix(), nanosKey, currTime.Nanosecond())
 	}
 }
 

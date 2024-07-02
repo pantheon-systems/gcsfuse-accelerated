@@ -9,10 +9,24 @@ on:
       - '*'
 
 jobs:
+  format-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: "1.22"
+    - name: CodeGen
+      run: go generate ./...
+    - name: Formatting diff
+      run: go fmt ./... && git diff --exit-code --name-only
+
   linux-tests:
     strategy:
       matrix:
-        go: [ 1.21.x ]
+        go: [ 1.22.x ]
     runs-on: ubuntu-20.04
     timeout-minutes: 15
 
@@ -29,10 +43,12 @@ jobs:
         CGO_ENABLED=0 go build ./...
         go install ./tools/build_gcsfuse
         build_gcsfuse . /tmp ${GITHUB_SHA}
-    - name: Test
-      run: CGO_ENABLED=0 go test -p 1 -count 1 -v -cover ./...
+    - name: Test all except caching parallely
+      run: CGO_ENABLED=0 go test -count 1 -v `go list ./... | grep -v internal/cache/...`
+    - name: Test caching
+      run: CGO_ENABLED=0 go test -p 1 -count 1 -v ./internal/cache/...
     - name: Cache RaceDetector Test
-      run: CGO_ENABLED=1 go test -p 1 -count 1 -v -race -cover ./internal/cache/...
+      run: go test -p 1 -count 1 -v -race ./internal/cache/...
   lint:
     name: Lint
     runs-on: ubuntu-20.04
@@ -40,7 +56,7 @@ jobs:
     - name: Setup Go
       uses: actions/setup-go@v3
       with:
-        go-version: "1.21"
+        go-version: "1.22"
     - name: checkout code
       uses: actions/checkout@v3
     - name: golangci-lint

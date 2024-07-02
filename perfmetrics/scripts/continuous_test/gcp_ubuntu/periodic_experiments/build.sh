@@ -5,7 +5,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http:#www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -82,7 +82,8 @@ fi
 # Executing perf tests
 LOG_FILE_FIO_TESTS="${KOKORO_ARTIFACTS_DIR}/gcsfuse-logs${EXPERIMENT_NUMBER}.txt"
 GCSFUSE_FIO_FLAGS="$GCSFUSE_FLAGS --log-file $LOG_FILE_FIO_TESTS --log-format \"text\" --stackdriver-export-interval=30s"
-BUCKET_NAME="experimental-periodic-perf-tests-${EXPERIMENT_NUMBER}"
+# Adding `golang-grpc-test` prefix to allow list bucket for grpc client so that we can also run workload with grpc-client in addition to http one.
+BUCKET_NAME="golang-grpc-test-experimental-periodic-perf-tests-${EXPERIMENT_NUMBER}"
 ./run_load_test_and_fetch_metrics.sh "$GCSFUSE_FIO_FLAGS" "$UPLOAD_FLAGS" "$BUCKET_NAME"
 
 # ls_metrics test. This test does gcsfuse mount with the passed flags first and then does the testing.

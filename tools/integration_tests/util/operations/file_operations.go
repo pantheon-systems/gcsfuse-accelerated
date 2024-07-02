@@ -19,16 +19,17 @@ import (
 	"bytes"
 	"crypto/rand"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"log"
 	"os"
-	"os/exec"
 	"path"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 const (
@@ -36,6 +37,11 @@ const (
 	OneMiB = OneKiB * OneKiB
 	// ChunkSizeForContentComparison is currently set to 1 MiB.
 	ChunkSizeForContentComparison int = OneMiB
+
+	// TimeSlop The radius we use for "expect mtime is within"-style assertions as kernel
+	// time can be slightly out of sync of time.Now().
+	// Ref: https://github.com/golang/go/issues/33510
+	TimeSlop = 25 * time.Millisecond
 )
 
 func copyFile(srcFileName, dstFileName string, allowOverwrite bool) (err error) {
@@ -155,16 +161,6 @@ func WriteFile(fileName string, content string) (err error) {
 	_, err = f.WriteAt([]byte(content), 0)
 
 	return
-}
-
-func MoveFile(srcFilePath string, destDirPath string) (err error) {
-	cmd := exec.Command("mv", srcFilePath, destDirPath)
-
-	err = cmd.Run()
-	if err != nil {
-		err = fmt.Errorf("Moving file operation is failed: %v", err)
-	}
-	return err
 }
 
 func CloseFile(file *os.File) {
@@ -430,10 +426,8 @@ func AreFilesIdentical(filepath1, filepath2 string) (bool, error) {
 // Returns size of a give GCS object with path (without 'gs://').
 // Fails if the object doesn't exist or permission to read object's metadata is not
 // available.
-// Uses 'gsutil du -s gs://gcsObjPath'.
-// Alternative 'gcloud storage du -s gs://gcsObjPath', but it doesn't work on kokoro VM.
 func GetGcsObjectSize(gcsObjPath string) (int, error) {
-	stdout, err := ExecuteGsutilCommandf("du -s gs://%s", gcsObjPath)
+	stdout, err := ExecuteGcloudCommandf("storage du -s gs://%s", gcsObjPath)
 	if err != nil {
 		return 0, err
 	}
@@ -452,10 +446,8 @@ func GetGcsObjectSize(gcsObjPath string) (int, error) {
 // Downloads given GCS object (with path without 'gs://') to localPath.
 // Fails if the object doesn't exist or permission to read object is not
 // available.
-// Uses 'gsutil cp gs://gcsObjPath localPath'
-// Alternative 'gcloud storage cp gs://gcsObjPath localPath' but it doesn't work on kokoro VM.
 func DownloadGcsObject(gcsObjPath, localPath string) error {
-	_, err := ExecuteGsutilCommandf("cp gs://%s %s", gcsObjPath, localPath)
+	_, err := ExecuteGcloudCommandf("storage cp gs://%s %s", gcsObjPath, localPath)
 	if err != nil {
 		return err
 	}
@@ -466,16 +458,12 @@ func DownloadGcsObject(gcsObjPath, localPath string) error {
 // Uploads given local file to GCS object (with path without 'gs://').
 // Fails if the file doesn't exist or permission to write to object/bucket is not
 // available.
-// Uses 'gsutil cp localPath gs://gcsObjPath'
-// Alternative 'gcloud storage cp localPath gs://gcsObjPath' but it doesn't work on kokoro VM.
 func UploadGcsObject(localPath, gcsObjPath string, uploadGzipEncoded bool) error {
 	var err error
 	if uploadGzipEncoded {
-		// Using gsutil instead of `gcloud alpha` here as `gcloud alpha`
-		// option `-Z` isn't supported on the kokoro VM.
-		_, err = ExecuteGsutilCommandf("cp -Z %s gs://%s", localPath, gcsObjPath)
+		_, err = ExecuteGcloudCommandf("storage cp -Z %s gs://%s", localPath, gcsObjPath)
 	} else {
-		_, err = ExecuteGsutilCommandf("cp %s gs://%s", localPath, gcsObjPath)
+		_, err = ExecuteGcloudCommandf("storage cp %s gs://%s", localPath, gcsObjPath)
 	}
 
 	return err
@@ -484,22 +472,16 @@ func UploadGcsObject(localPath, gcsObjPath string, uploadGzipEncoded bool) error
 // Deletes a given GCS object (with path without 'gs://').
 // Fails if the object doesn't exist or permission to delete object is not
 // available.
-// Uses 'gsutil rm gs://gcsObjPath'
-// Alternative 'gcloud storage rm gs://gcsObjPath' but it doesn't work on kokoro VM.
 func DeleteGcsObject(gcsObjPath string) error {
-	_, err := ExecuteGsutilCommandf("rm gs://%s", gcsObjPath)
+	_, err := ExecuteGcloudCommandf("rm gs://%s", gcsObjPath)
 	return err
 }
 
 // Clears cache-control attributes on given GCS object (with path without 'gs://').
 // Fails if the file doesn't exist or permission to modify object's metadata is not
 // available.
-// Uses 'gsutil setmeta -h "Cache-Control:" gs://<path>'
-// Preferred approach is 'gcloud storage objects update gs://gs://gcsObjPath --cache-control=' ' ' but it doesn't work on kokoro VM.
 func ClearCacheControlOnGcsObject(gcsObjPath string) error {
-	// Using gsutil instead of `gcloud alpha` here as `gcloud alpha`
-	// implementation for updating object metadata is missing on the kokoro VM.
-	_, err := ExecuteGsutilCommandf("setmeta -h \"Cache-Control:\" gs://%s ", gcsObjPath)
+	_, err := ExecuteGcloudCommandf("storage objects update --cache-control='' gs://%s", gcsObjPath)
 	return err
 }
 
@@ -624,4 +606,39 @@ func CreateFileOfSize(fileSize int64, filePath string, t *testing.T) {
 		t.Errorf("operations.GenerateRandomData: %v", err)
 	}
 	CreateFileWithContent(filePath, FilePermission_0600, string(randomData), t)
+}
+
+// CalculateCRC32 calculates and returns the CRC-32 checksum of the data from the provided Reader.
+func CalculateCRC32(src io.Reader) (uint32, error) {
+	crc32Table := crc32.MakeTable(crc32.Castagnoli) // Pre-calculate the table
+	hasher := crc32.New(crc32Table)
+
+	if _, err := io.Copy(hasher, src); err != nil {
+		return 0, fmt.Errorf("error calculating CRC-32: %w", err) // Wrap error
+	}
+
+	return hasher.Sum32(), nil // Return checksum and nil error on success
+}
+
+// CalculateFileCRC32 calculates and returns the CRC-32 checksum of a file.
+func CalculateFileCRC32(filePath string) (uint32, error) {
+	// Open file with simplified flags and permissions
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("error opening file: %w", err)
+	}
+	defer file.Close() // Ensure file closure
+
+	return CalculateCRC32(file)
+}
+
+// SizeOfFile returns the size of the given file by path.
+// by invoking a stat call on it.
+func SizeOfFile(filepath string) (size int64, err error) {
+	fstat, err := StatFile(filepath)
+	if err != nil {
+		return 0, err
+	}
+
+	return (*fstat).Size(), nil
 }

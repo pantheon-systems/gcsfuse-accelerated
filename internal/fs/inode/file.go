@@ -22,10 +22,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/contentcache"
-	"github.com/googlecloudplatform/gcsfuse/internal/gcsx"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/storageutil"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/contentcache"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/gcsx"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/storageutil"
 	"github.com/jacobsa/fuse/fuseops"
 	"github.com/jacobsa/syncutil"
 	"github.com/jacobsa/timeutil"
@@ -92,18 +92,18 @@ type FileInode struct {
 
 var _ Inode = &FileInode{}
 
-// Create a file inode for the given object in GCS. The initial lookup count is
+// Create a file inode for the given min object in GCS. The initial lookup count is
 // zero.
 //
-// REQUIRES: o != nil
-// REQUIRES: o.Generation > 0
-// REQUIRES: o.MetaGeneration > 0
-// REQUIRES: len(o.Name) > 0
-// REQUIRES: o.Name[len(o.Name)-1] != '/'
+// REQUIRES: m != nil
+// REQUIRES: m.Generation > 0
+// REQUIRES: m.MetaGeneration > 0
+// REQUIRES: len(m.Name) > 0
+// REQUIRES: m.Name[len(m.Name)-1] != '/'
 func NewFileInode(
 	id fuseops.InodeID,
 	name Name,
-	o *gcs.Object,
+	m *gcs.MinObject,
 	attrs fuseops.InodeAttributes,
 	bucket *gcsx.SyncerBucket,
 	localFileCache bool,
@@ -111,6 +111,10 @@ func NewFileInode(
 	mtimeClock timeutil.Clock,
 	localFile bool) (f *FileInode) {
 	// Set up the basic struct.
+	var minObj gcs.MinObject
+	if m != nil {
+		minObj = *m
+	}
 	f = &FileInode{
 		bucket:         bucket,
 		mtimeClock:     mtimeClock,
@@ -119,7 +123,7 @@ func NewFileInode(
 		attrs:          attrs,
 		localFileCache: localFileCache,
 		contentCache:   contentCache,
-		src:            storageutil.ConvertObjToMinObject(o),
+		src:            minObj,
 		local:          localFile,
 		unlinked:       false,
 	}
@@ -164,15 +168,20 @@ func (f *FileInode) checkInvariants() {
 }
 
 // LOCKS_REQUIRED(f.mu)
-func (f *FileInode) clobbered(ctx context.Context, forceFetchFromGcs bool) (o *gcs.Object, b bool, err error) {
+func (f *FileInode) clobbered(ctx context.Context, forceFetchFromGcs bool, includeExtendedObjectAttributes bool) (o *gcs.Object, b bool, err error) {
 	// Stat the object in GCS. ForceFetchFromGcs ensures object is fetched from
 	// gcs and not cache.
 	req := &gcs.StatObjectRequest{
-		Name:              f.name.GcsObjectName(),
-		ForceFetchFromGcs: forceFetchFromGcs,
+		Name:                           f.name.GcsObjectName(),
+		ForceFetchFromGcs:              forceFetchFromGcs,
+		ReturnExtendedObjectAttributes: includeExtendedObjectAttributes,
 	}
-	o, err = f.bucket.StatObject(ctx, req)
-
+	m, e, err := f.bucket.StatObject(ctx, req)
+	if includeExtendedObjectAttributes {
+		o = storageutil.ConvertMinObjectAndExtendedObjectAttributesToObject(m, e)
+	} else {
+		o = storageutil.ConvertMinObjectToObject(m)
+	}
 	// Special case: "not found" means we have been clobbered.
 	var notFoundErr *gcs.NotFoundError
 	if errors.As(err, &notFoundErr) {
@@ -400,7 +409,7 @@ func (f *FileInode) Attributes(
 
 	// If the object has been clobbered, we reflect that as the inode being
 	// unlinked.
-	_, clobbered, err := f.clobbered(ctx, false)
+	_, clobbered, err := f.clobbered(ctx, false, false)
 	if err != nil {
 		err = fmt.Errorf("clobbered: %w", err)
 		return
@@ -517,7 +526,12 @@ func (f *FileInode) SetMtime(
 
 	o, err := f.bucket.UpdateObject(ctx, req)
 	if err == nil {
-		f.src = storageutil.ConvertObjToMinObject(o)
+		var minObj gcs.MinObject
+		minObjPtr := storageutil.ConvertObjToMinObject(o)
+		if minObjPtr != nil {
+			minObj = *minObjPtr
+		}
+		f.src = minObj
 		return
 	}
 
@@ -564,7 +578,7 @@ func (f *FileInode) Sync(ctx context.Context) (err error) {
 	// properties and using that when object is synced below. StatObject by
 	// default sets the projection to full, which fetches all the object
 	// properties.
-	latestGcsObj, isClobbered, err := f.clobbered(ctx, true)
+	latestGcsObj, isClobbered, err := f.clobbered(ctx, true, true)
 
 	// Clobbered is treated as being unlinked. There's no reason to return an
 	// error in that case. We simply return without syncing the object.
@@ -593,7 +607,12 @@ func (f *FileInode) Sync(ctx context.Context) (err error) {
 
 	// If we wrote out a new object, we need to update our state.
 	if newObj != nil && !f.localFileCache {
-		f.src = storageutil.ConvertObjToMinObject(newObj)
+		var minObj gcs.MinObject
+		minObjPtr := storageutil.ConvertObjToMinObject(newObj)
+		if minObjPtr != nil {
+			minObj = *minObjPtr
+		}
+		f.src = minObj
 		// Convert localFile to nonLocalFile after it is synced to GCS.
 		if f.IsLocal() {
 			f.local = false

@@ -23,8 +23,8 @@ import (
 	"testing"
 
 	"cloud.google.com/go/storage"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 const (
@@ -153,4 +153,14 @@ func CreateNFilesInDir(ctx context.Context, storageClient *storage.Client, numFi
 		SetupFileInTestDirectory(ctx, storageClient, dirName, testFileName, fileSize, t)
 	}
 	return fileNames
+}
+
+func ValidateCRCWithGCS(gotCRC32Value uint32, objectPath string, ctx context.Context, storageClient *storage.Client, t *testing.T) {
+	attr, err := StatObject(ctx, storageClient, objectPath)
+	if err != nil {
+		t.Errorf("Failed to fetch object attributes: %v", err)
+	}
+	if attr.CRC32C != gotCRC32Value {
+		t.Errorf("CRC32 mismatch. Expected %d, Got %d", attr.CRC32C, gotCRC32Value)
+	}
 }

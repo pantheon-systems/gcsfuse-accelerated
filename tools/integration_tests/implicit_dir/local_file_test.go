@@ -19,11 +19,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"cloud.google.com/go/storage"
-	. "github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/client"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
-	"golang.org/x/net/context"
+	. "github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/client"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 const (
@@ -31,9 +29,7 @@ const (
 )
 
 var (
-	testDirPath   string
-	storageClient *storage.Client
-	ctx           context.Context
+	testDirPath string
 )
 
 // //////////////////////////////////////////////////////////////////////

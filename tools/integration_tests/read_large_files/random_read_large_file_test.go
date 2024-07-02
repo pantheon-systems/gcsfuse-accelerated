@@ -21,16 +21,14 @@ import (
 	"path"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 func TestReadLargeFileRandomly(t *testing.T) {
-	// Clean the mountedDirectory before running test.
-	setup.CleanMntDir()
-
+	testDir := setup.SetupTestDirectory(DirForReadLargeFilesTests)
 	fileInLocalDisk := path.Join(os.Getenv("HOME"), FiveHundredMBFile)
-	file := path.Join(setup.MntDir(), FiveHundredMBFile)
+	file := path.Join(testDir, FiveHundredMBFile)
 	// Create and copy the local file in mountedDirectory.
 	createFileOnDiskAndCopyToMntDir(fileInLocalDisk, file, FiveHundredMB, t)
 

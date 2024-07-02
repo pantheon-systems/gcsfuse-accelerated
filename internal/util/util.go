@@ -15,6 +15,7 @@
 package util
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -22,20 +23,26 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
-const GCSFUSE_PARENT_PROCESS_DIR = "gcsfuse-parent-process-dir"
+const (
+	GCSFUSE_PARENT_PROCESS_DIR = "gcsfuse-parent-process-dir"
 
-// Constants for read types - Sequential/Random
-const Sequential = "Sequential"
-const Random = "Random"
+	// Constants for read types - Sequential/Random
+	Sequential = "Sequential"
+	Random     = "Random"
+	Parallel   = "Parallel"
 
-const MaxMiBsInUint64 uint64 = math.MaxUint64 >> 20
+	MaxMiBsInUint64 uint64 = math.MaxUint64 >> 20
 
-// HeapSizeToRssConversionFactor is a constant factor
-// which we multiply to the calculated heap-size
-// to get the corresponding resident set size.
-const HeapSizeToRssConversionFactor float64 = 2
+	// HeapSizeToRssConversionFactor is a constant factor
+	// which we multiply to the calculated heap-size
+	// to get the corresponding resident set size.
+	HeapSizeToRssConversionFactor float64 = 2
+
+	MaxTimeDuration = time.Duration(math.MaxInt64)
+)
 
 // 1. Returns the same filepath in case of absolute path or empty filename.
 // 2. For child process, it resolves relative path like, ./test.txt, test.txt
@@ -101,4 +108,11 @@ func BytesToHigherMiBs(bytes uint64) uint64 {
 	}
 	const bytesInOneMiB uint64 = 1 << 20
 	return uint64(math.Ceil(float64(bytes) / float64(bytesInOneMiB)))
+}
+
+// IsolateContextFromParentContext creates a copy of the parent context which is
+// not cancelled when parent context is cancelled.
+func IsolateContextFromParentContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx = context.WithoutCancel(ctx)
+	return context.WithCancel(ctx)
 }

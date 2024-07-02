@@ -16,7 +16,6 @@ package read_cache
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"path"
@@ -26,10 +25,10 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/client"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/log_parser/json_parser/read_logs"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/client"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/log_parser/json_parser/read_logs"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 // Expected is a helper struct that stores list of attributes to be validated from logs.
@@ -122,13 +121,13 @@ func validateFileSizeInCacheDirectory(fileName string, filesize int64, t *testin
 
 func validateFileInCacheDirectory(fileName string, filesize int64, ctx context.Context, storageClient *storage.Client, t *testing.T) {
 	validateFileSizeInCacheDirectory(fileName, filesize, t)
-	// Validate content of file in cache directory matches GCS.
-	expectedPathOfCachedFile := getCachedFilePath(fileName)
-	content, err := operations.ReadFile(expectedPathOfCachedFile)
+	// Validate CRC of cached file matches GCS CRC.
+	cachedFilePath := getCachedFilePath(fileName)
+	crc32ValueOfCachedFile, err := operations.CalculateFileCRC32(cachedFilePath)
 	if err != nil {
-		t.Errorf("Failed to read cached file %s: %v", expectedPathOfCachedFile, err)
+		t.Errorf("CalculateFileCRC32 Failed: %v", err)
 	}
-	client.ValidateObjectContentsFromGCS(ctx, storageClient, testDirName, fileName, string(content), t)
+	client.ValidateCRCWithGCS(crc32ValueOfCachedFile, path.Join(testDirName, fileName), ctx, storageClient, t)
 }
 
 func validateFileIsNotCached(fileName string, t *testing.T) {
@@ -140,55 +139,12 @@ func validateFileIsNotCached(fileName string, t *testing.T) {
 	}
 }
 
-func unmountGCSFuseAndDeleteLogFile() {
-	setup.SetMntDir(rootDir)
-	if setup.MountedDirectory() == "" {
-		// Unmount GCSFuse only when tests are not running on mounted directory.
-		err := setup.UnMount()
-		if err != nil {
-			setup.LogAndExit(fmt.Sprintf("Error in unmounting bucket: %v", err))
-		}
-		// delete log file created
-		err = os.Remove(setup.LogFile())
-		if err != nil {
-			setup.LogAndExit(fmt.Sprintf("Error in deleting log file: %v", err))
-		}
-	}
-}
-
 func remountGCSFuse(flags []string, t *testing.T) {
 	setup.SetMntDir(rootDir)
-	unmountGCSFuseAndDeleteLogFile()
+	setup.UnmountGCSFuseAndDeleteLogFile(rootDir)
 
-	mountGCSFuse(flags)
+	setup.MountGCSFuseWithGivenMountFunc(flags, mountFunc)
 	setup.SetMntDir(mountDir)
-}
-
-func mountGCSFuse(flags []string) {
-	if setup.MountedDirectory() == "" {
-		// Mount GCSFuse only when tests are not running on mounted directory.
-		if err := mountFunc(flags); err != nil {
-			setup.LogAndExit(fmt.Sprintf("Failed to mount GCSFuse: %v", err))
-		}
-	}
-}
-
-func createStorageClient(t *testing.T, ctx *context.Context, storageClient **storage.Client) func() {
-	var err error
-	var cancel context.CancelFunc
-	*ctx, cancel = context.WithTimeout(*ctx, time.Minute*15)
-	*storageClient, err = client.CreateStorageClient(*ctx)
-	if err != nil {
-		log.Fatalf("client.CreateStorageClient: %v", err)
-	}
-	// return func to close storage client and release resources.
-	return func() {
-		err := (*storageClient).Close()
-		if err != nil {
-			t.Log("Failed to close storage client")
-		}
-		defer cancel()
-	}
 }
 
 func readFileAndValidateCacheWithGCS(ctx context.Context, storageClient *storage.Client,
@@ -201,9 +157,12 @@ func readFileAndValidateCacheWithGCS(ctx context.Context, storageClient *storage
 		// Validate cache size within limit.
 		validateCacheSizeWithinLimit(cacheCapacityInMB, t)
 	}
-	// Validate content read via gcsfuse with gcs.
-	client.ValidateObjectContentsFromGCS(ctx, storageClient, testDirName, filename,
-		expectedOutcome.content, t)
+	// Validate CRC32 of content read via gcsfuse with CRC32 value on gcs.
+	gotCRC32Value, err := operations.CalculateCRC32(strings.NewReader(expectedOutcome.content))
+	if err != nil {
+		t.Errorf("CalculateCRC32 Failed: %v", err)
+	}
+	client.ValidateCRCWithGCS(gotCRC32Value, path.Join(testDirName, filename), ctx, storageClient, t)
 
 	return expectedOutcome
 }
@@ -268,13 +227,6 @@ func setupFileInTestDir(ctx context.Context, storageClient *storage.Client, test
 func runTestsOnlyForDynamicMount(t *testing.T) {
 	if !strings.Contains(setup.MntDir(), setup.TestBucket()) {
 		log.Println("This test will run only for dynamic mounting...")
-		t.SkipNow()
-	}
-}
-
-func runTestsOnlyForStaticMount(t *testing.T) {
-	if strings.Contains(mountDir, setup.TestBucket()) || setup.OnlyDirMounted() != "" {
-		log.Println("This test will run only for static mounting...")
 		t.SkipNow()
 	}
 }

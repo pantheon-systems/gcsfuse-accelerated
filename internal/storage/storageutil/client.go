@@ -19,33 +19,49 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/auth"
-	mountpkg "github.com/googlecloudplatform/gcsfuse/internal/mount"
+	"github.com/googlecloudplatform/gcsfuse/v2/cfg"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/auth"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 )
 
+const urlSchemeSeparator = "://"
+
 type StorageClientConfig struct {
-	ClientProtocol             mountpkg.ClientProtocol
+	/** Common client parameters. */
+
+	// ClientProtocol decides the go-sdk client to create.
+	ClientProtocol    cfg.Protocol
+	UserAgent         string
+	CustomEndpoint    *url.URL
+	KeyFile           string
+	TokenUrl          string
+	ReuseTokenFromUrl bool
+	MaxRetrySleep     time.Duration
+	RetryMultiplier   float64
+
+	/** HTTP client parameters. */
 	MaxConnsPerHost            int
 	MaxIdleConnsPerHost        int
 	HttpClientTimeout          time.Duration
-	MaxRetrySleep              time.Duration
-	RetryMultiplier            float64
-	UserAgent                  string
-	CustomEndpoint             *url.URL
-	KeyFile                    string
-	TokenUrl                   string
-	ReuseTokenFromUrl          bool
 	ExperimentalEnableJsonRead bool
+	AnonymousAccess            bool
+
+	/** Grpc client parameters. */
+	GrpcConnPoolSize int
+
+	// Enabling new API flow for HNS bucket.
+	EnableHNS config.EnableHNS
 }
 
 func CreateHttpClient(storageClientConfig *StorageClientConfig) (httpClient *http.Client, err error) {
 	var transport *http.Transport
 	// Using http1 makes the client more performant.
-	if storageClientConfig.ClientProtocol == mountpkg.HTTP1 {
+	if storageClientConfig.ClientProtocol == cfg.HTTP1 {
 		transport = &http.Transport{
 			Proxy:               http.ProxyFromEnvironment,
 			MaxConnsPerHost:     storageClientConfig.MaxConnsPerHost,
@@ -65,37 +81,52 @@ func CreateHttpClient(storageClientConfig *StorageClientConfig) (httpClient *htt
 		}
 	}
 
-	tokenSrc, err := createTokenSource(storageClientConfig)
-	if err != nil {
-		err = fmt.Errorf("while fetching tokenSource: %w", err)
-		return
-	}
+	if storageClientConfig.AnonymousAccess {
+		// UserAgent will not be added if authentication is disabled.
+		// Bypassing authentication prevents the creation of an HTTP transport
+		// because it requires a token source.
+		// Setting a dummy token would conflict with the "WithoutAuthentication" option.
+		// While the "WithUserAgent" option could set a custom User-Agent, it's incompatible
+		// with the "WithHTTPClient" option, preventing the direct injection of a user agent
+		// when authentication is skipped.
+		httpClient = &http.Client{
+			Timeout: storageClientConfig.HttpClientTimeout,
+		}
+	} else {
+		var tokenSrc oauth2.TokenSource
+		tokenSrc, err = CreateTokenSource(storageClientConfig)
+		if err != nil {
+			err = fmt.Errorf("while fetching tokenSource: %w", err)
+			return
+		}
 
-	// Custom http client for Go Client.
-	httpClient = &http.Client{
-		Transport: &oauth2.Transport{
-			Base:   transport,
-			Source: tokenSrc,
-		},
-		Timeout: storageClientConfig.HttpClientTimeout,
+		// Custom http client for Go Client.
+		httpClient = &http.Client{
+			Transport: &oauth2.Transport{
+				Base:   transport,
+				Source: tokenSrc,
+			},
+			Timeout: storageClientConfig.HttpClientTimeout,
+		}
+		// Setting UserAgent through RoundTripper middleware
+		httpClient.Transport = &userAgentRoundTripper{
+			wrapped:   httpClient.Transport,
+			UserAgent: storageClientConfig.UserAgent,
+		}
 	}
-
-	// Setting UserAgent through RoundTripper middleware
-	httpClient.Transport = &userAgentRoundTripper{
-		wrapped:   httpClient.Transport,
-		UserAgent: storageClientConfig.UserAgent,
-	}
-
 	return httpClient, err
 }
 
-// It creates dummy token-source in case of non-nil custom url. If the custom-endpoint
-// is nil, it creates the token-source from the provided key-file or using ADC search
-// order (https://cloud.google.com/docs/authentication/application-default-credentials#order).
-func createTokenSource(storageClientConfig *StorageClientConfig) (tokenSrc oauth2.TokenSource, err error) {
-	if storageClientConfig.CustomEndpoint == nil {
-		return auth.GetTokenSource(context.Background(), storageClientConfig.KeyFile, storageClientConfig.TokenUrl, storageClientConfig.ReuseTokenFromUrl)
-	} else {
-		return oauth2.StaticTokenSource(&oauth2.Token{}), nil
+// It creates the token-source from the provided
+// key-file or using ADC search order (https://cloud.google.com/docs/authentication/application-default-credentials#order).
+func CreateTokenSource(storageClientConfig *StorageClientConfig) (tokenSrc oauth2.TokenSource, err error) {
+	return auth.GetTokenSource(context.Background(), storageClientConfig.KeyFile, storageClientConfig.TokenUrl, storageClientConfig.ReuseTokenFromUrl)
+}
+
+// StripScheme strips the scheme part of given url.
+func StripScheme(url string) string {
+	if strings.Contains(url, urlSchemeSeparator) {
+		url = strings.SplitN(url, urlSchemeSeparator, 2)[1]
 	}
+	return url
 }

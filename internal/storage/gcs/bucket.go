@@ -17,7 +17,31 @@ package gcs
 import (
 	"io"
 
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
 	"golang.org/x/net/context"
+)
+
+// BucketType represents different types of buckets like
+// Hierarchical or NonHierarchical as constants.
+type BucketType int
+
+// BucketType enum values.
+const (
+	// A default value of "nil" indicates that the bucket
+	// type has not been specified.
+	Nil BucketType = iota
+	NonHierarchical
+	Hierarchical
+	Unknown
+)
+
+const (
+	// ReqIdField is the key for the value of
+	// GCS req-id in context.
+	// This is used by debugBucket
+	// for passing down Request ID
+	// into the underlying bucket implementation.
+	ReqIdField string = "GcsReqId"
 )
 
 // Bucket represents a GCS bucket, pre-bound with a bucket name and necessary
@@ -30,6 +54,9 @@ import (
 // All methods are safe for concurrent access.
 type Bucket interface {
 	Name() string
+
+	// Return Type of bucket e.g. Hierarchical or NonHierarchical
+	BucketType() BucketType
 
 	// Create a reader for the contents of a particular generation of an object.
 	// On a nil error, the caller must arrange for the reader to be closed when
@@ -85,7 +112,7 @@ type Bucket interface {
 	//     https://cloud.google.com/storage/docs/json_api/v1/objects/get
 	StatObject(
 		ctx context.Context,
-		req *StatObjectRequest) (*Object, error)
+		req *StatObjectRequest) (*MinObject, *ExtendedObjectAttributes, error)
 
 	// List the objects in the bucket that meet the criteria defined by the
 	// request, returning a result object that contains the results and
@@ -114,4 +141,8 @@ type Bucket interface {
 	DeleteObject(
 		ctx context.Context,
 		req *DeleteObjectRequest) error
+
+	DeleteFolder(ctx context.Context, folderName string) error
+
+	GetFolder(ctx context.Context, folderName string) (*controlpb.Folder, error)
 }

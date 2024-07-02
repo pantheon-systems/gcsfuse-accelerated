@@ -19,24 +19,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/config"
-	. "github.com/jacobsa/ogletest"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
 )
-
-func TestFlag(t *testing.T) { RunTests(t) }
 
 ////////////////////////////////////////////////////////////////////////
 // Boilerplate
 ////////////////////////////////////////////////////////////////////////
 
 type FlagTest struct {
+	suite.Suite
 }
 
-func init() {
-	RegisterTestSuite(&FlagTest{})
-}
-
-func (t *FlagTest) SetUp(ti *TestInfo) {
+func TestFlagSuite(t *testing.T) {
+	suite.Run(t, new(FlagTest))
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -135,7 +132,7 @@ func (t *FlagTest) TestResolveMetadataCacheTTL() {
 		},
 	}
 	for _, input := range inputs {
-		AssertEq(input.expectedMetadataCacheTTL, ResolveMetadataCacheTTL(input.statCacheTTL, input.typeCacheTTL, input.ttlInSeconds))
+		assert.Equal(t.T(), input.expectedMetadataCacheTTL, ResolveMetadataCacheTTL(input.statCacheTTL, input.typeCacheTTL, input.ttlInSeconds))
 	}
 }
 
@@ -208,11 +205,11 @@ func (t *FlagTest) TestResolveStatCacheMaxSizeMB() {
 			// Old-scenario where user sets only stat-cache-capacity flag(s), and not metadata-cache:stat-cache-max-size-mb. Case 2: stat-cache-capacity is non-zero.
 			flagStatCacheCapacity:         10000,
 			mountConfigStatCacheMaxSizeMB: config.StatCacheMaxSizeMBUnsetSentinel,
-			expectedStatCacheMaxSizeMB:    26, // 26 MiB = MiB-ceiling (10k entries * (AssumedSizeOfPositiveStatCacheEntry + AssumedSizeOfNegativeStatCacheEntry) /entry)
+			expectedStatCacheMaxSizeMB:    16, // 16 MiB = MiB ceiling (10k entries * 1640 bytes (AssumedSizeOfPositiveStatCacheEntry + AssumedSizeOfNegativeStatCacheEntry))
 		},
 	} {
 		statCacheMaxSizeMB, err := ResolveStatCacheMaxSizeMB(input.mountConfigStatCacheMaxSizeMB, input.flagStatCacheCapacity)
-		AssertEq(nil, err)
-		AssertEq(input.expectedStatCacheMaxSizeMB, statCacheMaxSizeMB)
+		assert.NoError(t.T(), err)
+		assert.Equal(t.T(), input.expectedStatCacheMaxSizeMB, statCacheMaxSizeMB)
 	}
 }

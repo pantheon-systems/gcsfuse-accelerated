@@ -20,7 +20,9 @@ import (
 	"path"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 func checkIfObjDeletionFailed(objPath string, t *testing.T) {
@@ -30,29 +32,29 @@ func checkIfObjDeletionFailed(objPath string, t *testing.T) {
 		t.Errorf("Objects are deleted in read-only file system.")
 	}
 
-	checkErrorForReadOnlyFileSystem(err, t)
+	operations.CheckErrorForReadOnlyFileSystem(err, t)
 }
 
 func TestDeleteDir(t *testing.T) {
-	objPath := path.Join(setup.MntDir(), DirectoryNameInTestBucket)
+	objPath := path.Join(setup.MntDir(), TestDirForReadOnlyTest, DirectoryNameInTestBucket)
 
 	checkIfObjDeletionFailed(objPath, t)
 }
 
 func TestDeleteFile(t *testing.T) {
-	objPath := path.Join(setup.MntDir(), FileNameInTestBucket)
+	objPath := path.Join(setup.MntDir(), TestDirForReadOnlyTest, FileNameInTestBucket)
 
 	checkIfObjDeletionFailed(objPath, t)
 }
 
 func TestDeleteSubDirectory(t *testing.T) {
-	objPath := path.Join(setup.MntDir(), DirectoryNameInTestBucket, SubDirectoryNameInTestBucket)
+	objPath := path.Join(setup.MntDir(), TestDirForReadOnlyTest, DirectoryNameInTestBucket, SubDirectoryNameInTestBucket)
 
 	checkIfObjDeletionFailed(objPath, t)
 }
 
 func TestDeleteFileInDirectory(t *testing.T) {
-	objPath := path.Join(setup.MntDir(), DirectoryNameInTestBucket, FileNameInDirectoryTestBucket)
+	objPath := path.Join(setup.MntDir(), TestDirForReadOnlyTest, DirectoryNameInTestBucket, FileNameInDirectoryTestBucket)
 
 	checkIfObjDeletionFailed(objPath, t)
 }

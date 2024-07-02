@@ -27,15 +27,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/data"
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/file/downloader"
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/lru"
-	"github.com/googlecloudplatform/gcsfuse/internal/cache/util"
-	"github.com/googlecloudplatform/gcsfuse/internal/locker"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/storageutil"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/data"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/file/downloader"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/lru"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/cache/util"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/config"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/locker"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/storageutil"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
 	. "github.com/jacobsa/ogletest"
 )
 
@@ -77,7 +78,10 @@ func (chrT *cacheHandlerTest) SetUp(*TestInfo) {
 	chrT.cache = lru.NewCache(HandlerCacheMaxSize)
 
 	// Job manager
-	chrT.jobManager = downloader.NewJobManager(chrT.cache, util.DefaultFilePerm, util.DefaultDirPerm, chrT.cacheDir, DefaultSequentialReadSizeMb)
+	chrT.jobManager = downloader.NewJobManager(chrT.cache, util.DefaultFilePerm,
+		util.DefaultDirPerm, chrT.cacheDir, DefaultSequentialReadSizeMb, &config.FileCacheConfig{
+			EnableCRC: true,
+		})
 
 	// Mocked cached handler object.
 	chrT.cacheHandler = NewCacheHandler(chrT.cache, chrT.jobManager, chrT.cacheDir, util.DefaultFilePerm, util.DefaultDirPerm)
@@ -142,11 +146,11 @@ func (chrT *cacheHandlerTest) getMinObject(objName string, objContent []byte) *g
 	err := storageutil.CreateObjects(ctx, chrT.bucket, objects)
 	AssertEq(nil, err)
 
-	gcsObj, err := chrT.bucket.StatObject(ctx, &gcs.StatObjectRequest{Name: objName,
+	minObject, _, err := chrT.bucket.StatObject(ctx, &gcs.StatObjectRequest{Name: objName,
 		ForceFetchFromGcs: true})
 	AssertEq(nil, err)
-	minObject := storageutil.ConvertObjToMinObject(gcsObj)
-	return &minObject
+	AssertNe(nil, minObject)
+	return minObject
 }
 
 // doesFileExist returns true if the file exists and false otherwise.

@@ -22,10 +22,10 @@ import (
 	"path"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/gzip/helpers"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting/static_mounting"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/gzip/helpers"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/mounting/static_mounting"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 const (
@@ -61,7 +61,7 @@ func setup_testdata(m *testing.M) error {
 		filesize                    int
 		keepCacheControlNoTransform bool // if true, no-transform is reset as ''
 		enableGzipEncodedContent    bool // if true, original file content is gzip-encoded
-		enableGzipContentEncoding   bool // if true, the content is uploaded as gsutil cp -Z i.e. with content-encoding: gzip header in GCS
+		enableGzipContentEncoding   bool // if true, the content is uploaded as gcloud storage cp -Z i.e. with content-encoding: gzip header in GCS
 	}{
 		{
 			filename:                    TextContentWithContentEncodingWithNoTransformFilename,
@@ -178,6 +178,11 @@ func TestMain(m *testing.M) {
 	commonFlags := []string{"--sequential-read-size-mb=" + fmt.Sprint(SeqReadSizeMb), "--implicit-dirs"}
 	flags := [][]string{commonFlags}
 
+	if !testing.Short() {
+		gRPCFlags := append(commonFlags, "--client-protocol=grpc")
+		flags = append(flags, gRPCFlags)
+	}
+
 	setup.ExitWithFailureIfBothTestBucketAndMountedDirectoryFlagsAreNotSet()
 
 	if setup.TestBucket() == "" && setup.MountedDirectory() != "" {
@@ -205,8 +210,6 @@ func TestMain(m *testing.M) {
 	setup.SetUpTestDirForTestBucketFlag()
 
 	successCode := static_mounting.RunTests(flags, m)
-
-	setup.RemoveBinFileCopiedForTesting()
 
 	os.Exit(successCode)
 }

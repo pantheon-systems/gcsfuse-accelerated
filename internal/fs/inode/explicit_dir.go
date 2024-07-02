@@ -17,8 +17,8 @@ package inode
 import (
 	"time"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/gcsx"
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/gcsx"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
 	"github.com/jacobsa/fuse/fuseops"
 	"github.com/jacobsa/timeutil"
 )
@@ -35,7 +35,7 @@ type ExplicitDirInode interface {
 func NewExplicitDirInode(
 	id fuseops.InodeID,
 	name Name,
-	o *gcs.Object,
+	m *gcs.MinObject,
 	attrs fuseops.InodeAttributes,
 	implicitDirs bool,
 	enableManagedFoldersListing bool,
@@ -61,8 +61,8 @@ func NewExplicitDirInode(
 	d = &explicitDirInode{
 		dirInode: wrapped.(*dirInode),
 		generation: Generation{
-			Object:   o.Generation,
-			Metadata: o.MetaGeneration,
+			Object:   m.Generation,
+			Metadata: m.MetaGeneration,
 		},
 	}
 

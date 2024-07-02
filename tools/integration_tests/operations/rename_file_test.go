@@ -13,20 +13,21 @@
 // limitations under the License.
 
 // Provides integration tests for rename file.
-package operations
+package operations_test
 
 import (
+	"path"
 	"testing"
 
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
-	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/setup"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/operations"
+	"github.com/googlecloudplatform/gcsfuse/v2/tools/integration_tests/util/setup"
 )
 
 func TestRenameFile(t *testing.T) {
-	// Clean the mountedDirectory before running test.
-	setup.CleanMntDir()
+	testDir := setup.SetupTestDirectory(DirForOperationTests)
+	fileName := path.Join(testDir, tempFileName)
 
-	fileName := setup.CreateTempFile()
+	operations.CreateFileWithContent(fileName, setup.FilePermission_0600, Content, t)
 
 	content, err := operations.ReadFile(fileName)
 	if err != nil {

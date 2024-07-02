@@ -12,7 +12,8 @@ import (
 	runtime "runtime"
 	unsafe "unsafe"
 
-	"github.com/googlecloudplatform/gcsfuse/internal/storage/gcs"
+	"cloud.google.com/go/storage/control/apiv2/controlpb"
+	"github.com/googlecloudplatform/gcsfuse/v2/internal/storage/gcs"
 	oglemock "github.com/jacobsa/oglemock"
 	context "golang.org/x/net/context"
 )
@@ -155,6 +156,27 @@ func (m *mockBucket) DeleteObject(p0 context.Context, p1 *gcs.DeleteObjectReques
 	return
 }
 
+func (m *mockBucket) DeleteFolder(ctx context.Context, folderName string) (o0 error) {
+	// Get a file name and line number for the caller.
+	_, file, line, _ := runtime.Caller(1)
+
+	// Hand the call off to the controller, which does most of the work.
+	retVals := m.controller.HandleMethodCall(
+		m,
+		"DeleteFolder",
+		file,
+		line,
+		[]interface{}{})
+	if len(retVals) != 1 {
+		panic(fmt.Sprintf("mockBucket.DeleteFolder: invalid return values: %v", retVals))
+	}
+	// o0 string
+	if retVals[0] != nil {
+		o0 = retVals[0].(error)
+	}
+	return
+}
+
 func (m *mockBucket) ListObjects(p0 context.Context, p1 *gcs.ListObjectsRequest) (o0 *gcs.Listing, o1 error) {
 	// Get a file name and line number for the caller.
 	_, file, line, _ := runtime.Caller(1)
@@ -208,6 +230,30 @@ func (m *mockBucket) Name() (o0 string) {
 	return
 }
 
+func (m *mockBucket) BucketType() (o0 gcs.BucketType) {
+	// Get a file name and line number for the caller.
+	_, file, line, _ := runtime.Caller(1)
+
+	// Hand the call off to the controller, which does most of the work.
+	retVals := m.controller.HandleMethodCall(
+		m,
+		"BucketType",
+		file,
+		line,
+		[]interface{}{})
+
+	if len(retVals) != 1 {
+		panic(fmt.Sprintf("mockBucket.BucketType: invalid return values: %v", retVals))
+	}
+
+	// o0 string
+	if retVals[0] != nil {
+		o0 = retVals[0].(gcs.BucketType)
+	}
+
+	return
+}
+
 func (m *mockBucket) NewReader(p0 context.Context, p1 *gcs.ReadObjectRequest) (o0 io.ReadCloser, o1 error) {
 	// Get a file name and line number for the caller.
 	_, file, line, _ := runtime.Caller(1)
@@ -237,7 +283,8 @@ func (m *mockBucket) NewReader(p0 context.Context, p1 *gcs.ReadObjectRequest) (o
 	return
 }
 
-func (m *mockBucket) StatObject(p0 context.Context, p1 *gcs.StatObjectRequest) (o0 *gcs.Object, o1 error) {
+func (m *mockBucket) StatObject(p0 context.Context,
+	p1 *gcs.StatObjectRequest) (o0 *gcs.MinObject, o1 *gcs.ExtendedObjectAttributes, o2 error) {
 	// Get a file name and line number for the caller.
 	_, file, line, _ := runtime.Caller(1)
 
@@ -249,18 +296,23 @@ func (m *mockBucket) StatObject(p0 context.Context, p1 *gcs.StatObjectRequest) (
 		line,
 		[]interface{}{p0, p1})
 
-	if len(retVals) != 2 {
+	if len(retVals) != 3 {
 		panic(fmt.Sprintf("mockBucket.StatObject: invalid return values: %v", retVals))
 	}
 
-	// o0 *Object
+	// o0 *MinObject
 	if retVals[0] != nil {
-		o0 = retVals[0].(*gcs.Object)
+		o0 = retVals[0].(*gcs.MinObject)
 	}
 
-	// o1 error
+	// o1 *ExtendedObjectAttributes
 	if retVals[1] != nil {
-		o1 = retVals[1].(error)
+		o1 = retVals[1].(*gcs.ExtendedObjectAttributes)
+	}
+
+	// o2 error
+	if retVals[2] != nil {
+		o2 = retVals[2].(error)
 	}
 
 	return
@@ -292,5 +344,34 @@ func (m *mockBucket) UpdateObject(p0 context.Context, p1 *gcs.UpdateObjectReques
 		o1 = retVals[1].(error)
 	}
 
+	return
+}
+
+func (m *mockBucket) GetFolder(
+	ctx context.Context,
+	prefix string) (o0 *controlpb.Folder, o1 error) {
+	// Get a file name and line number for the caller.
+	_, file, line, _ := runtime.Caller(1)
+
+	// Hand the call off to the controller, which does most of the work.
+	retVals := m.controller.HandleMethodCall(
+		m,
+		"GetFolder",
+		file,
+		line,
+		[]interface{}{})
+
+	if len(retVals) != 2 {
+		panic(fmt.Sprintf("mockBucket.GetFolder: invalid return values: %v", retVals))
+	}
+
+	if retVals[0] != nil {
+		o0 = retVals[0].(*controlpb.Folder)
+	}
+
+	// o1 error
+	if retVals[1] != nil {
+		o1 = retVals[1].(error)
+	}
 	return
 }
